@@ -151,6 +151,50 @@ def apply_style(llm: LLM, text: str, profile: str, sample_excerpt: str) -> tuple
 
 # ---------- State of the Art ----------
 
+_INTRO_HEAD_RE = re.compile(r"^\s*(?:\d+\.?\s*)?(introduction|background)\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
+_METHODS_HEAD_RE = re.compile(
+    r"^\s*(?:\d+\.?\s*)?(methods?|materials?\s+and\s+methods|patients\s+and\s+methods|study\s+design)\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE)
+_REFS_HEAD_RE = re.compile(r"^\s*(references|bibliography|literatur)\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def split_intro(full_text: str) -> tuple[str, str]:
+    """(Einleitung, Literaturverzeichnis) eines Volltexts. Ohne erkennbare Überschrift: Textanfang."""
+    refs = ""
+    rm = None
+    for m in _REFS_HEAD_RE.finditer(full_text):
+        if m.start() > len(full_text) // 3:
+            rm = m
+            break
+    if rm:
+        refs, full_text = full_text[rm.end():], full_text[: rm.start()]
+    im = _INTRO_HEAD_RE.search(full_text)
+    if im:
+        mm = _METHODS_HEAD_RE.search(full_text, im.end())
+        intro = full_text[im.end(): mm.start() if mm else im.end() + 8000]
+    else:
+        intro = full_text[:6000]
+    return intro.strip()[:9000], refs.strip()[:20000]
+
+
+def generate_sota_from_intro(llm: LLM, topic: str, pub_title: str, full_text: str) -> dict | None:
+    """State of the Art aus der Einleitung der ersten folgenden Publikation (3–5 Kernaussagen als
+    Hinleitung, mit den dort zitierten Quellen). Ohne Websuche. None, wenn keine Einleitung erkennbar."""
+    intro, refs = split_intro(full_text or "")
+    if len(intro) < 400:
+        return None
+    raw = llm.text(P.sota_from_intro_prompt(topic, pub_title, intro, refs or "(nicht verfügbar)"),
+                   model=MODEL_MAIN, max_tokens=4000, effort="medium")
+    body, entries = split_sota_response(raw)
+    if not body:
+        return None
+    sentences = split_sentences(body)
+    if len(sentences) > 5:
+        body = " ".join(sentences[:5])
+    body, literature = finalize_sota_citations(body, entries)
+    return {"text": body, "literature": literature, "source": "intro"}
+
+
 def generate_sota(llm: LLM, thema_text: str, sprache_kw: str, guideline_docs: list[tuple[str, str]]) -> dict:
     prompt = M.sota_prompt(thema_text, sprache_kw)
     if guideline_docs:
@@ -185,7 +229,7 @@ def generate_sota(llm: LLM, thema_text: str, sprache_kw: str, guideline_docs: li
     if len(sentences) > 5:
         body = " ".join(sentences[:5])
     body, literature = finalize_sota_citations(body, entries)
-    return {"text": body, "literature": literature}
+    return {"text": body, "literature": literature, "source": "web"}
 
 
 def translate_sota(llm: LLM, sota: dict) -> dict:
@@ -194,7 +238,8 @@ def translate_sota(llm: LLM, sota: dict) -> dict:
         "Übersetze den folgenden Absatz präzise und fachsprachlich ins Deutsche. Klammerverweise wie "
         "\"(1)\" bleiben exakt an ihrer Stelle, Zahlen unverändert. Gib nur die Übersetzung aus.\n\n"
         + sota["text"], model=MODEL_FAST, max_tokens=2000, effort="low")
-    return {"text": " ".join(text.split()), "literature": list(sota["literature"])}
+    return {"text": " ".join(text.split()), "literature": list(sota["literature"]),
+            "source": sota.get("source", "web")}
 
 
 # ---------- Längenstufen automatisch festlegen ----------

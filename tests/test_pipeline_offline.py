@@ -59,6 +59,8 @@ class FakeLLM:
                 "Authors' Conclusion:", "Schlussfolgerung der Autoren:").replace(
                 "Conclusion for Practice:", "Fazit für die Praxis:").replace("0.80", "0,80").replace(
                 "0.70-0.90", "0,70-0,90")
+        if "Einleitung der Publikation:" in p:
+            return "State of the Art\nThe burden is high (1). Standard care has limits (2).\nReferences\n1. Intro A. 2024.\n2. Intro B. Gut. 2023;1:1."
         if "State of the" in p and "Art" in p and "Baseline" in p:
             return "State of the Art\nThe field is established (1). Gaps remain (2).\nReferences\n1. Guideline A. 2025.\n2. Review B. Lancet. 2024;1:1."
         if "Übersetze den folgenden Absatz" in p:
@@ -178,6 +180,9 @@ def test_full_pipeline(monkeypatch=None):
     rec = proj["records"][first]
     uploads = {"a.pdf": _pdf_with_image(f"{rec['title']} Smith J et al. " + "body text " * 500)}
     pipeline.match_uploads(llm, proj, uploads, log)
+    second = proj["topics"]["T2"]["recommended"][0]
+    pipeline.match_uploads(llm, proj, {"b.pdf": _pdf_with_image(
+        f"{proj['records'][second]['title']} Smith J et al. " + "intro text " * 500)}, log)
     assert proj["uploads"]["a.pdf"]["pmid"] == first
     proj["style"]["alt.docx"] = "Früheres Manuskript. " * 300
     pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "trial": True})
@@ -197,6 +202,8 @@ def test_full_pipeline(monkeypatch=None):
     assert any("Smith J, Doe A, Roe B et al" in b for b in biblio)
     assert not any("Unused X" in b for b in biblio), "nicht zitierte Quelle darf nicht erscheinen"
     raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
+    assert proj["topics"]["T2"]["sota_en"]["source"] == "intro", "State of the Art aus der Einleitung"
+    assert proj["topics"]["T4"]["sota_en"]["source"] == "web", "ohne Volltext: wie bisher per Websuche"
     assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
     i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")
     assert i_sota == i_t2 + 1, "State of the Art vor dem Thema mit den meisten Publikationen"
@@ -385,6 +392,15 @@ def test_outline_levels():
     assert toc[8:] == expected, toc
 
 
+def test_split_intro():
+    from medupdate.appraisal import split_intro
+    ft = ("Title\nAbstract\nShort.\nIntroduction\nVarices bleed often [1]. Therapy is standard [2].\n"
+          "Methods\nWe did things.\n" + "x " * 500 + "\nReferences\n1. A B. Gut. 2020.\n2. C D. Lancet. 2021.")
+    intro, refs = split_intro(ft)
+    assert intro.startswith("Varices") and "Methods" not in intro and "We did" not in intro
+    assert refs.startswith("1. A B")
+
+
 def test_repeated_citations():
     from medupdate.citations import merge_repeated_citations
     d = Document()
@@ -410,5 +426,6 @@ if __name__ == "__main__":
     test_length_budget()
     test_outline_levels()
     test_repeated_citations()
+    test_split_intro()
     test_full_pipeline()
     print("OK")

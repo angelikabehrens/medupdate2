@@ -308,3 +308,39 @@ Erklärungen davor oder danach.
 
 Text:
 {text}"""
+
+
+def sota_from_intro_prompt(topic: str, pub_title: str, intro: str, references: str) -> str:
+    return f"""Erstelle für das Thema „{topic}“ einen kurzen Abschnitt „State of the Art“ auf englischer \
+Sprache. Er steht im Manuskript direkt vor der Besprechung der folgenden Publikation und leitet auf \
+das Thema hin.
+
+Grundlage ist die Einleitung dieser Publikation („{pub_title}“). Wähle daraus 3 bis 5 Kernaussagen, \
+die den Leser auf das Thema hinführen und es in den Gesamtkontext einordnen: aktuelle Bedeutung des \
+Problems, etablierter Standard bzw. Wissensstand und die offene Frage oder Evidenzlücke, an der die \
+Studie ansetzt.
+
+Regeln:
+- 3 bis 5 Sätze, insgesamt ca. 70 bis 110 Wörter, jeder Satz höchstens ca. 30 Wörter.
+- Formuliere die Aussagen eigenständig und fachsprachlich um; übernimm keine Sätze wörtlich.
+- Nimm keine Ergebnisse oder Schlussfolgerungen der Studie vorweg und nenne die Studie selbst nicht.
+- Zahlen nur, wenn sie so in der Einleitung stehen. Erfinde nichts hinzu.
+- Arzneimittel nur mit Wirkstoffnamen. Keine Markdown-Formatierung.
+
+Literaturverweise:
+- Belege die Aussagen mit den Quellen, die die Einleitung an dieser Stelle selbst zitiert, als \
+nummerierte Klammerverweise vor dem Satzpunkt („… etabliert (1).“), neu nummeriert ab 1 in der \
+Reihenfolge des ersten Auftretens. Höchstens 5 Quellen; mehrere Quellen zu einer Aussage als „(1,2)“.
+- Übernimm die Angaben dieser Quellen aus dem Literaturverzeichnis der Publikation (unten). Format: \
+Nachname Initialen, Nachname Initialen, Nachname Initialen. Titel. Journal. Jahr;Band:Seiten. Bei mehr als \
+drei Autoren die ersten drei, dann „et al.“. Fehlende Angaben weglassen, nichts ergänzen.
+- Lässt sich eine Quelle im Literaturverzeichnis nicht eindeutig finden, formuliere die Aussage ohne Verweis.
+
+Ausgabe: die Überschrift „State of the Art“, darunter der Fließtext, darunter die Überschrift \
+„References“ mit der nummerierten Liste. Keine weitere Erläuterung.
+
+Einleitung der Publikation:
+{intro}
+
+Literaturverzeichnis der Publikation (Auszug):
+{references}"""

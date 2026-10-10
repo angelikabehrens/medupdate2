@@ -470,11 +470,25 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     counts = {t: sum(1 for _, tt in ready if tt == t) for t in topic_ids}
     sota_ids = A.sota_topics(topic_ids, proj["topics"], counts)
     proj["sota_topics"] = sota_ids
-    todo = [(t, t) for t in sota_ids if not proj["topics"][t].get("sota_en")]
+
+    def first_pub(tid):
+        """Die erste Publikation des Themas mit Volltext (sie folgt direkt auf den State of the Art)."""
+        return next((p for p, tt in ready if tt == tid and proj["pubs"][p].get("full_text")), None)
+
+    # Neu erstellen, wenn noch keiner da ist oder ein älterer (per Websuche) durch einen aus der
+    # Einleitung der folgenden Publikation ersetzt werden kann
+    todo = [(t, t) for t in sota_ids if not proj["topics"][t].get("sota_en")
+            or (proj["topics"][t]["sota_en"].get("source") != "intro" and first_pub(t))]
 
     def sota(tid):
         title = proj["topics"][tid]["title"]
-        en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=5000, total=12000))
+        en = None
+        p = first_pub(tid)
+        if p:
+            en = A.generate_sota_from_intro(llm, title, proj["records"].get(p, {}).get("title", ""),
+                                            proj["pubs"][p]["full_text"])
+        if en is None:
+            en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=5000, total=12000))
         return {"sota_en": en, "sota_de": A.translate_sota(llm, en)}
 
     if options.get("sota", True):

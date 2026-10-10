@@ -19,7 +19,8 @@ Die Auswahl lässt sich anpassen; die Empfehlungsliste gibt es als Word-Datei.
 Publikationen sowie fehlende Leitlinien hochladen. Danach automatisch: Volltexte (Upload oder Open
 Access), kritische Würdigung mit Kommentar und Fazit, Kürzung nach Qualität und Seitenlimit,
 Übersetzung ins Deutsche, State of the Art (einer je Hauptabschnitt, vor dem Thema mit den meisten
-Publikationen), Stilanpassung an die eigenen Manuskripte,
+Publikationen; 3–5 Kernaussagen aus der Einleitung der ersten folgenden Publikation, ohne Volltext per
+Websuche), Stilanpassung an die eigenen Manuskripte,
 Abbildungsauswahl, Zusammenführung und Prüfung der Literatur über PubMed, Formatierung nach den
 Hinweisen für Autoren, Übertragung in die Formatvorlage und Prüfprotokoll.
 
