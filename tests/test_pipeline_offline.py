@@ -400,6 +400,14 @@ def test_outline_levels():
     assert toc[8:] == expected, toc
 
 
+def test_sota_trailing_note():
+    from medupdate.citations import split_sota_response
+    raw = ("State of the Art\nA gilt (1). B gilt (2).\nLiteratur\n1. Pimentel-Nunes P. ESGE. Endoscopy. 2022.\n"
+           "2. Ishihara R. Guidelines. Dig Endosc. 2020.\n\nNicht verifiziert:\n1. Dass A gilt.\n2. Dass B gilt. Bitte prüfen.")
+    body, entries = split_sota_response(raw)
+    assert entries == {1: "Pimentel-Nunes P. ESGE. Endoscopy. 2022.", 2: "Ishihara R. Guidelines. Dig Endosc. 2020."}, entries
+
+
 def test_split_intro():
     from medupdate.appraisal import split_intro
     ft = ("Title\nAbstract\nShort.\nIntroduction\nVarices bleed often [1]. Therapy is standard [2].\n"
@@ -435,5 +443,6 @@ if __name__ == "__main__":
     test_outline_levels()
     test_repeated_citations()
     test_split_intro()
+    test_sota_trailing_note()
     test_full_pipeline()
     print("OK")

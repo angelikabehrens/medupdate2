@@ -130,14 +130,24 @@ def split_sota_response(raw: str) -> tuple[str, dict[int, str]]:
     body = re.sub(r"\s+([.,;:])", r"\1", body)
     body = re.sub(r"\s*([.!?])\s*(\(\d+(?:\s*,\s*\d+)*\))(?=\s|$)", r" \2\1", body)
 
+    # Die Liste endet bei einer Nummer, die schon vorkam, oder bei Text nach einer Leerzeile: Dort hängt
+    # das Modell manchmal Hinweise an ("Nicht verifiziert: 1. Dass …"), die sonst echte Quellen überschreiben.
     entries: dict[int, str] = {}
     last: int | None = None
+    blank = False
     for line in lit_raw.split("\n"):
         em = re.match(r"^\s*\(?(\d+)\)?[.):]?\s+(.*)$", line)
         if em:
-            last = int(em.group(1))
-            entries[last] = em.group(2).strip()
-        elif line.strip() and last is not None:
+            n = int(em.group(1))
+            if n in entries:
+                break
+            last, blank = n, False
+            entries[n] = em.group(2).strip()
+        elif not line.strip():
+            blank = last is not None
+        elif last is not None:
+            if blank or line.strip().endswith(":"):
+                break
             entries[last] += " " + line.strip()
     return body, entries
 

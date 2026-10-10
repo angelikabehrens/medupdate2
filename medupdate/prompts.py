@@ -905,5 +905,6 @@ AUSGABE
 
 Gib die Überschrift „State of the Art“, darunter den fertigen Fließtext (vorzugsweise 3 bis 4 Sätze, \
 höchstens 5), darunter die Überschrift „{sota_lit_label}“ mit der nummerierten Literaturliste aus. \
-Erfinde keine Inhalte."""
+Erfinde keine Inhalte. Nach der Literaturliste folgt nichts mehr: keine Hinweise, Vorbehalte oder \
+Prüfbitten. Eine Aussage, die du nicht mit einer gefundenen Quelle belegen kannst, lässt du weg."""
     return prompt

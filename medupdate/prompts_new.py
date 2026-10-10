@@ -341,7 +341,8 @@ drei Autoren die ersten drei, dann „et al.“. Fehlende Angaben weglassen, nic
 - Lässt sich eine Quelle im Literaturverzeichnis nicht eindeutig finden, formuliere die Aussage ohne Verweis.
 
 Ausgabe: die Überschrift „State of the Art“, darunter der Fließtext, darunter die Überschrift \
-„References“ mit der nummerierten Liste. Keine weitere Erläuterung.
+„References“ mit der nummerierten Liste. Nach der Liste folgt nichts mehr: keine Hinweise, \
+Vorbehalte oder Prüfbitten.
 
 Einleitung der Publikation:
 {intro}
