@@ -202,6 +202,39 @@ def test_full_pipeline(monkeypatch=None):
     (Path(tempfile.gettempdir()) / "medupdate_test_DE.docx").write_bytes(out["manuskript_DE"])
 
 
+def test_search_broadening():
+    from medupdate import recommend
+    calls = []
+
+    def fake_search(q, n, email=""):
+        calls.append(q)
+        return ([] if "narrow" in q else [str(20000000 + len(calls) * 10 + i) for i in range(5)]), 5
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            if "SENSITIVERE" in prompt:
+                return {"pico": "", "queries": [{"name": "breit", "query": "wide"}], "exclusion": ""}
+            return {"pico": "P", "queries": [{"name": "praezise", "query": "narrow"}], "exclusion": ""}
+
+    old_search, old_fetch = pubmed.search, pubmed.fetch_records
+    pubmed.search, pubmed.fetch_records = fake_search, (lambda ids, email="": {})
+    try:
+        res = recommend.recommend_for_topic(L(), {"title": "Fundusvarizen"}, "", {}, "", 6)
+    finally:
+        pubmed.search, pubmed.fetch_records = old_search, old_fetch
+    assert len(res["attempts"]) == 3, "erweiterte Suche und längerer Zeitraum"
+    assert res["window"][0] < recommend.time_window(12)[0].isoformat()
+
+    pubmed.search = lambda q, n, email="": (_ for _ in ()).throw(RuntimeError("403"))
+    try:
+        recommend.collect_candidates({"queries": [{"name": "a", "query": "x"}]}, *recommend.time_window(12), "")
+        raise AssertionError("Fehler muss sichtbar werden")
+    except RuntimeError as ex:
+        assert "PubMed" in str(ex)
+    finally:
+        pubmed.search = old_search
+
+
 def test_length_budget():
     from medupdate.appraisal import plan_tiers
     pubs = [{"id": str(i), "length_score": s} for i, s in enumerate([90, 85, 70, 60, 50])]
@@ -215,6 +248,7 @@ def test_length_budget():
 
 
 if __name__ == "__main__":
+    test_search_broadening()
     test_length_budget()
     test_full_pipeline()
     print("OK")

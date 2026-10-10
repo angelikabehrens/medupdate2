@@ -66,12 +66,27 @@ Ist das Thema breit (z.B. eine ganze Erkrankung), beschreibe die klinisch wichti
    - "breit": sensitiver, mehr Synonyme und verwandte Begriffe, damit wichtige Arbeiten nicht fehlen.
    - "hohe_evidenz": wie "praezise", aber eingeschränkt auf randomisierte Studien, Metaanalysen und \
 systematische Reviews (z.B. randomized controlled trial[pt] OR meta-analysis[pt] OR systematic[sb]).
-3. Verwende korrekte PubMed-Syntax: Feld-Tags, OR innerhalb eines Konzepts, AND zwischen Konzepten, \
+3. Schreibe ALLE Suchbegriffe auf ENGLISCH (PubMed indexiert englisch): deutsche Themenbegriffe \
+übersetzen (z.B. "Fundusvarizen" → "gastric varices" / "fundic varices", MeSH "Esophageal and Gastric \
+Varices"[Mesh]). Verwende nur MeSH-Begriffe, die es tatsächlich gibt; im Zweifel Freitext [tiab].
+   Verwende korrekte PubMed-Syntax: Feld-Tags, OR innerhalb eines Konzepts, AND zwischen Konzepten, \
 Klammern. KEINE Datumsangaben und KEINE Sprachfilter in die Suchstrings schreiben – das ergänzt die App.
 4. Nenne Ausschlusskriterien (z.B. Tierstudien, pädiatrische Population, wenn nicht gemeint).
 
 Hinweise: Bevorzuge Begriffe, wie sie in Titeln und Abstracts aktueller klinischer Studien vorkommen. \
-Vermeide zu viele AND-Verknüpfungen, die die Trefferzahl auf null drücken."""
+Vermeide zu viele AND-Verknüpfungen, die die Trefferzahl auf null drücken: höchstens zwei bis drei \
+Konzepte mit AND verknüpfen; "breit" am besten nur das Kernkonzept mit allen Synonymen."""
+
+
+def search_broaden_prompt(topic: str, focus: str, failed: str) -> str:
+    return f"""Die folgenden PubMed-Suchstrategien zum Thema „{topic}“ (Suchfokus: {focus}) haben zusammen \
+zu wenige Treffer geliefert:
+
+{failed}
+
+Formuliere drei deutlich SENSITIVERE Suchstrategien auf Englisch: nur das Kernkonzept des Themas mit \
+allen gängigen englischen Synonymen und Schreibweisen als Freitext ([tiab]), ODER-verknüpft, optional ein \
+passender MeSH-Begriff; höchstens ein weiteres Konzept mit AND. Keine Datums- oder Sprachfilter."""
 
 
 def ranking_prompt(topic: str, pico: str, candidates_block: str, recency_text: str) -> str:

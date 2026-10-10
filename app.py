@@ -170,13 +170,24 @@ if proj.get("toc"):
         with st.expander(f"📚 {head}" + (f" – {len(rec_ids)} Empfehlungen" if rec_ids is not None else "")):
             t["enabled"] = st.checkbox("Thema in das Manuskript aufnehmen", value=t.get("enabled", True),
                                        key=f"en_{tid}")
+            if t.get("rec_error"):
+                st.error(f"Die Literaturrecherche ist für dieses Thema fehlgeschlagen: {t['rec_error']}. "
+                         "Ein erneuter Start von Schritt 1 wiederholt nur die fehlgeschlagenen Themen.")
             if rec_ids is None:
-                st.info("Noch keine Literaturempfehlung.")
+                if not t.get("rec_error"):
+                    st.info("Noch keine Literaturempfehlung.")
                 continue
             if not rec_ids:
                 st.warning("Keine Arbeit der Priorität A gefunden. Bei Bedarf eine Arbeit aus der Reserve anhaken.")
             st.caption(f"Zeitraum {t['window'][0]} bis {t['window'][1]} · {t['n_candidates']} Kandidaten bewertet · "
                        f"Treffer je Suchstrategie: {t.get('query_hits')}")
+            with st.popover("🔎 Verwendete PubMed-Suchen"):
+                for a in t.get("attempts") or [{"window": t["window"], "queries": t.get("plan", {}).get("queries", []),
+                                                "hits": t.get("query_hits", {})}]:
+                    st.markdown(f"**Zeitraum {a['window'][0]} bis {a['window'][1]}**")
+                    for q in a["queries"]:
+                        st.code(q["query"], language=None)
+                        st.caption(f"{q['name']}: {a['hits'].get(q['name'], '?')} Treffer")
             selected = list(t.get("selected", rec_ids))
             ranking = t.get("ranking", {})
             for pmid in rec_ids + t.get("reserve", []):

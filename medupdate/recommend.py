@@ -73,8 +73,19 @@ def plan_search(llm: LLM, topic: dict, chapter: str, von: date, bis: date) -> di
     return llm.json(
         P.search_plan_prompt(topic["title"], topic.get("english_search_focus", ""), chapter,
                              von.strftime("%d.%m.%Y"), bis.strftime("%d.%m.%Y")),
-        PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=6000,
+        PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000,
     )
+
+
+MIN_CANDIDATES = 8
+
+
+def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
+    failed = "\n".join(f"- {q['name']}: {q['query']}" for q in plan.get("queries", []))
+    data = llm.json(P.search_broaden_prompt(topic["title"], topic.get("english_search_focus", ""), failed),
+                    PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000)
+    data["pico"] = plan.get("pico") or data.get("pico", "")
+    return data
 
 
 def collect_candidates(plan: dict, von: date, bis: date, email: str,
@@ -90,6 +101,9 @@ def collect_candidates(plan: dict, von: date, bis: date, email: str,
             ids, count = [], f"Fehler: {ex}"
         per_query.append(ids)
         stats[q["name"]] = count
+    errors = [v for v in stats.values() if isinstance(v, str)]
+    if stats and len(errors) == len(stats):
+        raise RuntimeError(f"PubMed nicht erreichbar oder Suche fehlerhaft ({errors[0]})")
     merged: list[str] = []
     seen = set()
     for i in range(max((len(x) for x in per_query), default=0)):
@@ -114,7 +128,7 @@ def prefilter(records: list[dict]) -> list[dict]:
 
 
 def rank(llm: LLM, topic: dict, pico: str, records: list[dict], recency_text: str,
-         batch_size: int = 25) -> dict[str, dict]:
+         batch_size: int = 15) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for i in range(0, len(records), batch_size):
         batch = records[i:i + batch_size]
@@ -124,7 +138,7 @@ def rank(llm: LLM, topic: dict, pico: str, records: list[dict], recency_text: st
             for r in batch
         )
         data = llm.json(P.ranking_prompt(topic["title"], pico, block, recency_text), RANK_SCHEMA,
-                        model=MODEL_MAIN, max_tokens=16000)
+                        model=MODEL_MAIN, max_tokens=32000)
         valid = {r["pmid"] for r in batch}
         for item in data.get("items", []):
             if item.get("pmid") in valid:
@@ -200,6 +214,25 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
     plan = plan_search(llm, topic, chapter, von, bis)
     log(f"PubMed-Suche für „{topic['title']}“…")
     pmids, stats = collect_candidates(plan, von, bis, email)
+    attempts = [{"window": [von.isoformat(), bis.isoformat()], "queries": plan.get("queries", []), "hits": stats}]
+    if len(pmids) < MIN_CANDIDATES:
+        # Zu wenige Treffer: zuerst sensitivere Suchstrategien, dann ein doppelt so langer Zeitraum
+        log(f"Wenige Treffer für „{topic['title']}“ – Suche wird erweitert…")
+        plan2 = broaden_search(llm, topic, plan)
+        more, stats2 = collect_candidates(plan2, von, bis, email)
+        attempts.append({"window": [von.isoformat(), bis.isoformat()], "queries": plan2.get("queries", []),
+                         "hits": stats2})
+        pmids = list(dict.fromkeys(pmids + more))
+        if len(pmids) < MIN_CANDIDATES:
+            von2 = bis - (bis - von) * 2
+            more, stats3 = collect_candidates(plan2, von2, bis, email)
+            attempts.append({"window": [von2.isoformat(), bis.isoformat()], "queries": plan2.get("queries", []),
+                             "hits": stats3})
+            pmids = list(dict.fromkeys(pmids + more))
+            if more:
+                von = von2
+        plan = {**plan, "queries": plan.get("queries", []) + plan2.get("queries", [])}
+        stats = {f"{k} (erweitert)": v for k, v in stats2.items()} | stats
     records = pubmed.fetch_records(pmids, email) if pmids else {}
     candidates = prefilter([records[p] for p in pmids if p in records])
     log(f"{len(candidates)} Kandidaten für „{topic['title']}“ werden bewertet…")
@@ -207,7 +240,7 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
     ranking = rank(llm, topic, plan.get("pico", ""), candidates, f"der letzten {months} Monate") if candidates else {}
     chosen, backup = select(ranking, n_max)
     return {
-        "plan": plan, "window": [von.isoformat(), bis.isoformat()], "query_hits": stats,
+        "plan": plan, "window": [von.isoformat(), bis.isoformat()], "query_hits": stats, "attempts": attempts,
         "n_candidates": len(candidates), "ranking": ranking, "recommended": chosen, "reserve": backup,
         "records": {p: records[p] for p in set(chosen) | set(backup) | set(ranking) if p in records},
     }
