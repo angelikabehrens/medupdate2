@@ -78,6 +78,11 @@ class FakeLLM:
     def json(self, prompt, schema, **kw):
         p = prompt if isinstance(prompt, str) else json.dumps(prompt, default=str)
         props = schema["properties"]
+        if "refs" in props:
+            pid = re.search(r"- id (\d+)", p).group(1)
+            return {"refs": [{"pub_id": pid, "manuscript": "alt.docx",
+                              "sentence_de": "Im Jahr 2025 hatten wir dazu eine Vorstudie vorgestellt.",
+                              "sentence_en": "In 2025 we presented a pilot study on this."}]}
         if "topics" in props:
             return {"chapter_number": "8", "chapter_title": "Gastroenterologie",
                     "topics": [{"number": "8.1.1", "title": "Thema Eins", "english_search_focus": "topic one",
@@ -198,6 +203,7 @@ def test_full_pipeline(monkeypatch=None):
     doc = Document(io.BytesIO(out["manuskript_DE"]))
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "Fazit für die Praxis" in text and "Studie:" in text
+    assert text.count("Im Jahr 2025 hatten wir dazu eine Vorstudie vorgestellt.") == 1, "Rückbezug auf früheres Manuskript"
     assert "Biblio" in {p.style.name for p in doc.paragraphs}
     biblio = [p.text for p in doc.paragraphs if p.style.name == "Biblio"]
     # 6 Publikationen + je Thema 2 SotA-Quellen + Meta-Analyse + Leitlinie

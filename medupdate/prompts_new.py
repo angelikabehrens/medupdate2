@@ -349,3 +349,34 @@ Einleitung der Publikation:
 
 Literaturverzeichnis der Publikation (Auszug):
 {references}"""
+
+
+def own_refs_prompt(manuscripts: list[tuple[str, str]], pubs: list[dict], max_refs: int) -> str:
+    ms = "\n\n".join(f"=== Früheres Manuskript „{name}“ ===\n{text}" for name, text in manuscripts)
+    ps = "\n".join(f"- id {p['id']} | Thema: {p['topic']} | {p['title']} | {p['summary']}" for p in pubs)
+    return f"""Du unterstützt die Autorin eines jährlich erscheinenden ärztlichen Fortbildungshandbuchs. Unten \
+stehen ihre früheren Manuskripte und die Publikationen, die sie im neuen Manuskript bespricht.
+
+Suche höchstens {max_refs} Stellen, an denen ein inhaltlicher Rückbezug auf ein früheres Manuskript \
+für die Leser wirklich sinnvoll ist: Das frühere Manuskript hat eine Publikation oder ein Ergebnis zur \
+selben klinischen Frage besprochen, und die neue Publikation bestätigt, ergänzt, widerlegt oder führt \
+es weiter. Lieber keinen Rückbezug als einen gezwungenen. Gibt es keinen sinnvollen, gib eine leere \
+Liste zurück.
+
+Je Rückbezug:
+- "pub_id": die id der neuen Publikation (aus der Liste unten),
+- "manuscript": der Name des früheren Manuskripts,
+- "sentence_de": EIN deutscher Satz (höchstens ca. 35 Wörter) im Stil der Autorin, z.B. „Im Jahr 2025 \
+hatten wir zu den Ösophagusvarizen die Studie von Müller et al. vorgestellt, die … zeigte; die \
+vorliegende Arbeit ergänzt nun …“. Verwende die Wir-Form wie im Beispiel.
+- "sentence_en": derselbe Satz auf Englisch.
+
+Strenge Regeln: Übernimm Jahr, Studie und Ergebnis des früheren Manuskripts nur so, wie sie dort stehen. \
+Steht das Jahr nicht eindeutig im Manuskript, schreibe „In einem früheren Beitrag“ statt einer \
+Jahreszahl. Erfinde nichts. Über die neue Publikation nur sagen, was in ihrer Zusammenfassung unten steht. \
+Keine Literaturverweise in Klammern.
+
+Neue Publikationen:
+{ps}
+
+{ms}"""

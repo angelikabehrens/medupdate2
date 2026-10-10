@@ -289,6 +289,8 @@ if any("recommended" in t for t in proj["topics"].values()):
         opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
         opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
+        opt_own = st.checkbox("Inhaltliche Rückbezüge auf meine früheren Manuskripte (höchstens 2, nur wo sinnvoll)",
+                              value=True, help="Nur wenn eigene Manuskripte hochgeladen sind. Ein zusätzlicher KI-Aufruf.")
         b1, b2 = st.columns(2)
         opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
                                 "vollständigen Lauf)", value=not out_any(proj))
@@ -324,7 +326,7 @@ if any("recommended" in t for t in proj["topics"].values()):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
-                                                         "trial": opt_trial, "trial_topic": opt_trial_topic,
+                                                         "trial": opt_trial, "trial_topic": opt_trial_topic, "own_refs": opt_own,
                                                          "reshorten": opt_reshorten})
 
             run_with_status("Manuskript wird erstellt", step2, llm)

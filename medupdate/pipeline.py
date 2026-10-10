@@ -23,7 +23,7 @@ from .citations import (
     reconcile_local_citations,
     strip_appraisal_preamble,
 )
-from .config import MAX_PUBS_PER_TOPIC, PARALLEL_WORKERS
+from .config import MAX_PUBS_PER_TOPIC, MODEL_MAIN, PARALLEL_WORKERS
 from .files import extract_images_from_pdf, extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
@@ -533,6 +533,19 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             else:
                 proj["pubs"][p]["styled_de"], proj["pubs"][p]["style_ok"] = res
 
+    # 7b. Inhaltliche Rückbezüge auf frühere eigene Manuskripte (höchstens OWN_REFS_MAX, nur wo sinnvoll)
+    if proj.get("style") and options.get("own_refs", True):
+        key = sorted(p for p, _ in ready)
+        if proj.get("own_refs_for") != key:
+            log("Rückbezüge auf frühere Manuskripte werden gesucht…")
+            try:
+                proj["own_refs"] = find_own_refs(llm, proj, ready)
+                proj["own_refs_for"] = key
+            except AccountError:
+                raise
+            except Exception as ex:
+                _err(proj, "Rückbezüge auf frühere Manuskripte", ex)
+
     # 8. Abbildungen
     if options.get("figures", True):
         max_fig = (proj.get("rules") or {}).get("max_figures") or 15
@@ -575,6 +588,9 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                 else:
                     text = d["short_en"]
                     abstract = rec.get("abstract") if proj["tiers"].get(p) == "2 Seiten" else None
+                own = (proj.get("own_refs") or {}).get(p) if options.get("own_refs", True) else None
+                if own:
+                    text = insert_own_ref(text, own["de" if lang == "Deutsch" else "en"])
                 text, lit = reconcile_local_citations(text, d["literature"])
                 fig = d.get("figure")
                 figure = ({"bytes": fig["bytes"], "typ": fig["typ"],
@@ -715,6 +731,54 @@ def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
                             "subsection": (num, st) if t_idx == 1 else None,
                             "number": f"{num}.{t_idx}", "level": 3}
     return out
+
+
+OWN_REFS_MAX = 2
+OWN_REFS_SCHEMA = obj({"refs": arr(obj({"pub_id": STR, "manuscript": STR, "sentence_de": STR,
+                                        "sentence_en": STR}))})
+
+
+def find_own_refs(llm: LLM, proj: dict, ready: list[tuple[str, str]]) -> dict[str, dict]:
+    """Ein KI-Aufruf über alle früheren Manuskripte und alle Publikationen: höchstens OWN_REFS_MAX
+    Rückbezüge {pub_id: {"manuscript", "de", "en"}}."""
+    manuscripts = [(n, t[:15000]) for n, t in list(proj["style"].items())[:4]]
+    pubs = [{"id": p, "topic": proj["topics"][t]["title"], "title": proj["records"].get(p, {}).get("title", p),
+             "summary": " ".join((proj["pubs"][p].get("short_en") or "").split())[:500]} for p, t in ready]
+    res = llm.json(P.own_refs_prompt(manuscripts, pubs, OWN_REFS_MAX), OWN_REFS_SCHEMA, model=MODEL_MAIN,
+                   max_tokens=4000, effort="medium")
+    out = {}
+    for r in res.get("refs", []):
+        if r.get("pub_id") in proj["pubs"] and r.get("sentence_de", "").strip() and len(out) < OWN_REFS_MAX:
+            out[r["pub_id"]] = {"manuscript": r.get("manuscript", ""), "de": r["sentence_de"].strip(),
+                                "en": r.get("sentence_en", "").strip()}
+    return out
+
+
+def insert_own_ref(text: str, sentence: str) -> str:
+    """Setzt den Rückbezug als eigenen Satz vor das Fazit bzw. den Kommentar, sonst vor den letzten Satz."""
+    if not sentence:
+        return text
+    lines = text.split("\n")
+    idx = next((i for i, l in enumerate(lines)
+                if re.match(r"^\**\s*(Kommentar|Fazit für die Praxis|Comment|Conclusion for Practice)\s*:", l.strip())), None)
+    if idx is not None:
+        j = max((i for i in range(idx) if lines[i].strip()), default=None)
+        abstract_label = re.compile(r"^\**\s*(Studie|Ergebnisse|Schlussfolgerung der Autoren|Study|Results|"
+                                    r"Authors'? Conclusion)\s*:", re.IGNORECASE)
+        if j is not None and not abstract_label.match(lines[j].strip()):
+            lines[j] = lines[j].rstrip() + " " + sentence
+        else:
+            lines.insert(idx, sentence)  # keine Würdigung davor: eigener Absatz vor dem Fazit
+        return "\n".join(lines)
+    j = max((i for i, l in enumerate(lines) if l.strip()), default=None)
+    if j is None:
+        return text
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-ZÄÖÜ])", lines[j].strip())
+    if len(parts) > 1:
+        lines[j] = " ".join(parts[:-1] + [sentence, parts[-1]])
+    else:
+        lines[j] = lines[j].rstrip() + " " + sentence
+    return "\n".join(lines)
 
 
 def partial_docx(proj: dict) -> bytes | None:
