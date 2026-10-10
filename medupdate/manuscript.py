@@ -86,9 +86,9 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
 
         sota = b.get("sota")
         if sota and sota.get("text"):
+            doc.add_paragraph("")
             hp = doc.add_paragraph()
             hp.add_run("State of the Art").underline = True
-            doc.add_paragraph("")
             doc.add_paragraph(sota["text"].strip())
             if sota.get("literature"):
                 doc.add_paragraph("")

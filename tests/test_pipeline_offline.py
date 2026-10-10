@@ -206,12 +206,12 @@ def test_full_pipeline(monkeypatch=None):
     assert proj["topics"]["T4"]["sota_en"]["source"] == "web", "ohne Volltext: wie bisher per Websuche"
     assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
     i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")
-    assert i_sota == i_t2 + 1, "State of the Art vor dem Thema mit den meisten Publikationen"
+    assert i_sota == i_t2 + 2, "State of the Art vor dem Thema mit den meisten Publikationen"
     paras = doc.paragraphs
     k = next(i for i, p in enumerate(paras) if p.text == "State of the Art")
     run = paras[k].runs[0]
     assert run.underline and not run.bold, "State of the Art unterstrichen, nicht fett"
-    assert paras[k + 1].text == "" and paras[k + 2].text.strip(), "eine Leerzeile unter der Überschrift"
+    assert paras[k - 1].text == "" and paras[k + 1].text.strip(), "Leerzeile vor, nicht nach der Überschrift"
     toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
     print("GLIEDERUNG", toc)
     expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),

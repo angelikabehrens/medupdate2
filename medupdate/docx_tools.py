@@ -427,12 +427,12 @@ def copy_document_content_into_template(
             continue
 
         if re.fullmatch(r"state of the art", text_stripped, re.IGNORECASE):
-            # Überschrift des State of the Art: unterstrichen, nicht fett, mit Leerzeile darunter
+            # Überschrift des State of the Art: unterstrichen, nicht fett, mit Leerzeile davor
+            template_doc.add_paragraph("")
             hp = template_doc.add_paragraph()
             run = hp.add_run(text_stripped)
             run.underline = True
             run.bold = False
-            template_doc.add_paragraph("")
             i += 1
             continue
 
