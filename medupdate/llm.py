@@ -11,10 +11,12 @@ Alle KI-Aufrufe der App laufen über diese Klasse. Sie kümmert sich um:
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import anthropic
 
-from .config import MODEL_FAST, MODEL_MAIN, WEB_FETCH_TOOL, WEB_SEARCH_TOOL
+from .config import MODEL_FAST, MODEL_MAIN, PRICE_PER_WEB_SEARCH, PRICES, WEB_FETCH_TOOL, WEB_SEARCH_TOOL
 
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -27,9 +29,74 @@ class RefusalError(RuntimeError):
     """Die Anfrage wurde von allen Modellen der Rückfallkette abgelehnt."""
 
 
+class AccountError(RuntimeError):
+    """Problem mit dem Anthropic-Konto (Guthaben, Ausgabenlimit, Schlüssel) – Wiederholen hilft nicht."""
+
+
+# Wartezeiten bei Rate-Limit/Überlastung: lange genug, dass sich das Minutenkontingent erholt
+_WAITS = [20, 40, 60, 90, 120, 120, 120]
+
+
+def _explain(ex: Exception) -> Exception:
+    """Übersetzt API-Fehler in verständliche deutsche Meldungen."""
+    if isinstance(ex, anthropic.AuthenticationError):
+        return AccountError("Der API-Schlüssel ist ungültig oder wurde gelöscht.")
+    if isinstance(ex, anthropic.PermissionDeniedError):
+        return AccountError("Der API-Schlüssel hat keine Berechtigung für dieses Modell oder diese Funktion "
+                            f"(z.B. Websuche in der Console deaktiviert). Details: {ex}")
+    if isinstance(ex, anthropic.APIStatusError):
+        msg = str(ex).lower()
+        billing_words = ("credit balance", "billing", "spend limit", "usage limit")
+        if ex.status_code == 402 or (ex.status_code == 400 and any(w in msg for w in billing_words)):
+            return AccountError("Das Anthropic-Konto meldet ein Abrechnungsproblem: Guthaben aufgebraucht oder "
+                                "monatliches Ausgabenlimit (Console → Settings → Limits) erreicht. "
+                                f"Details: {ex}")
+        if isinstance(ex, anthropic.RateLimitError):
+            return RuntimeError("Rate-Limit des Anthropic-Kontos wiederholt erreicht (zu viele Token pro "
+                                "Minute). Das ist kein Guthabenproblem: neue Konten haben niedrige Limits, "
+                                "die mit der Zeit steigen. Bitte in den Secrets PARALLEL_WORKERS = \"1\" "
+                                f"setzen und erneut starten. Details: {ex}")
+    return ex
+
+
 class LLM:
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key, max_retries=4, timeout=900.0)
+    def __init__(self, api_key: str, on_wait=None):
+        self.client = anthropic.Anthropic(api_key=api_key, max_retries=2, timeout=900.0)
+        self.cost_usd = 0.0
+        self.web_searches = 0
+        self._lock = threading.Lock()
+        self.on_wait = on_wait or (lambda msg: None)
+
+    def _account(self, model: str, usage) -> None:
+        p = next((v for k, v in PRICES.items() if model.startswith(k)), PRICES[MODEL_MAIN])
+        g = lambda name: getattr(usage, name, 0) or 0  # noqa: E731
+        stu = getattr(usage, "server_tool_use", None)
+        searches = (getattr(stu, "web_search_requests", 0) or 0) if stu else 0
+        cost = (g("input_tokens") * p["input"] + g("output_tokens") * p["output"]
+                + g("cache_creation_input_tokens") * p["cache_write"]
+                + g("cache_read_input_tokens") * p["cache_read"]) / 1e6 + searches * PRICE_PER_WEB_SEARCH
+        with self._lock:
+            self.cost_usd += cost
+            self.web_searches += searches
+
+    def _stream(self, kwargs: dict):
+        """Ein Aufruf mit geduldigem Warten bei Rate-Limit (429) und Überlastung (529/5xx)."""
+        for attempt in range(len(_WAITS) + 1):
+            try:
+                with self.client.beta.messages.stream(**kwargs) as stream:
+                    return stream.get_final_message()
+            except (anthropic.RateLimitError, anthropic.InternalServerError) as ex:
+                if attempt >= len(_WAITS):
+                    raise _explain(ex) from ex
+                wait = _WAITS[attempt]
+                try:
+                    wait = max(wait, int(ex.response.headers.get("retry-after", "0")))
+                except Exception:
+                    pass
+                self.on_wait(f"KI-Kontingent ausgelastet – warte {wait} Sek. (Versuch {attempt + 1})")
+                time.sleep(wait)
+            except anthropic.APIStatusError as ex:
+                raise _explain(ex) from ex
 
     def _run(self, *, model: str, messages: list, max_tokens: int, effort: str, tools: list | None,
              output_format: dict | None, system: str | None, max_continuations: int = 6):
@@ -52,8 +119,8 @@ class LLM:
         collected: list = []
         message = None
         for _ in range(max_continuations):
-            with self.client.beta.messages.stream(**kwargs) as stream:
-                message = stream.get_final_message()
+            message = self._stream(kwargs)
+            self._account(getattr(message, "model", None) or kwargs["model"], message.usage)
             collected.extend(message.content)
             if message.stop_reason != "pause_turn":
                 break

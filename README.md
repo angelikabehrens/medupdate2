@@ -38,6 +38,7 @@ Zwischenstände lassen sich in der Seitenleiste speichern und später wieder lad
    - `ANTHROPIC_API_KEY` – gemeinsamer KI-Zugang (alternativ gibt jeder Nutzer seinen Schlüssel ein)
    - `APP_PASSWORD` – optionaler Zugangscode
    - `UNPAYWALL_EMAIL` – optional
+   - `PARALLEL_WORKERS` – optional, Standard 2; bei Abbrüchen wegen Rate-Limit auf `"1"` setzen
 4. Zugriff unter "Share" auf **private** stellen und Nutzer per E-Mail einladen.
 
 **Niemals** einen API-Schlüssel oder Zugangscode in `app.py` oder in eine Datei im Repository schreiben.
@@ -57,4 +58,8 @@ Test ohne Internet: `python tests/test_pipeline_offline.py`
 - Es wird nichts dauerhaft auf dem Server gespeichert. Zwischenstand und Word-Dateien immer herunterladen.
 - Ein vollständiger Durchlauf dauert je nach Zahl der Publikationen deutlich länger als in MyLuo, weil alle
   Schritte nacheinander automatisch laufen. Die Seite dabei geöffnet lassen.
+- Kosten: Die App zeigt nach jedem Lauf die geschätzten KI-Kosten (Listenpreise) an. Größter Posten ist die
+  kritische Würdigung mit Websuche (etwa 1–2 USD pro Publikation).
+- Neue Anthropic-Konten haben niedrige Rate-Limits (Token pro Minute). Die App wartet dann automatisch;
+  bricht sie trotzdem ab, `PARALLEL_WORKERS = "1"` setzen. Ein erneuter Start setzt an derselben Stelle fort.
 - Das Ergebnis ist ein Entwurf: Zahlen, Zitate und Literatur vor der Abgabe prüfen (siehe Prüfprotokoll).

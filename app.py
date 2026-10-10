@@ -58,6 +58,8 @@ with st.sidebar:
     else:
         st.header("🔑 KI-Zugang")
         api_key = st.text_input("Anthropic-API-Schlüssel", type="password")
+    if proj.get("cost_usd"):
+        st.caption(f"KI-Kosten dieses Projekts bisher ≈ {proj['cost_usd']:.2f} USD")
     st.divider()
     st.header("💾 Zwischenstand")
     st.caption("Die App speichert nichts auf dem Server. Den Zwischenstand hier herunterladen und später "
@@ -93,7 +95,8 @@ def get_llm() -> LLM | None:
     return LLM(api_key)
 
 
-def run_with_status(label: str, fn) -> None:
+def run_with_status(label: str, fn, llm: LLM | None = None) -> None:
+    before = llm.cost_usd if llm else 0.0
     with st.status(label, expanded=True) as status:
         line = st.empty()
         started = time.time()
@@ -106,7 +109,15 @@ def run_with_status(label: str, fn) -> None:
             status.update(label=f"{label} – fertig", state="complete", expanded=False)
         except Exception as ex:
             status.update(label=f"{label} – abgebrochen", state="error")
-            st.error(f"Abgebrochen: {ex}. Ein erneuter Start setzt an derselben Stelle fort.")
+            st.error(f"Abgebrochen: {ex}\n\nEin erneuter Start setzt an derselben Stelle fort; bereits "
+                     "Erledigtes wird nicht noch einmal bezahlt. Zur Sicherheit den Zwischenstand in der "
+                     "Seitenleiste herunterladen.")
+        finally:
+            if llm:
+                spent = llm.cost_usd - before
+                proj["cost_usd"] = proj.get("cost_usd", 0.0) + spent
+                st.caption(f"KI-Kosten dieses Laufs ≈ {spent:.2f} USD ({llm.web_searches} Websuchen); "
+                           f"Projekt bisher ≈ {proj['cost_usd']:.2f} USD (Listenpreise, Schätzung).")
 
 
 # ======================================================================
@@ -143,7 +154,7 @@ if go1:
             pipeline.run_recommendations(llm, proj, log)
             pipeline.run_guideline_search(llm, proj, log)
 
-        run_with_status("Schritt 1 läuft", step1)
+        run_with_status("Schritt 1 läuft", step1, llm)
 
 if proj.get("toc"):
     toc = proj["toc"]
@@ -236,6 +247,11 @@ if any("recommended" in t for t in proj["topics"].values()):
                 "Manuskripte</div>", unsafe_allow_html=True)
 
     wanted = pipeline.selected_pmids(proj)
+    n_sec = len({t.get("section_number") or tid for tid, t in proj["topics"].items() if t.get("enabled", True)})
+    st.info(f"Geschätzte KI-Kosten für Schritt 2: etwa {len(wanted) * 1.2 + n_sec * 0.4 + 2:.0f}–"
+            f"{len(wanted) * 2.0 + n_sec * 0.8 + 4:.0f} USD für {len(wanted)} Publikationen "
+            "(kritische Würdigung mit Websuche ist der größte Posten). Die tatsächlichen Kosten zeigt die App "
+            "nach jedem Lauf an.")
     missing_ft = [p for p in wanted if not proj["pubs"].get(p, {}).get("full_text")
                   and not proj["records"].get(p, {}).get("is_oa")]
     if missing_ft:
@@ -285,7 +301,7 @@ if any("recommended" in t for t in proj["topics"].values()):
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style})
 
-            run_with_status("Manuskript wird erstellt", step2)
+            run_with_status("Manuskript wird erstellt", step2, llm)
 
     out = proj.get("outputs") or {}
     if out.get("manuskript_DE"):

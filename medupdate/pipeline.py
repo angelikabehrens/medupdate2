@@ -24,7 +24,7 @@ from .config import MAX_PUBS_PER_TOPIC, PARALLEL_WORKERS
 from .files import extract_images_from_pdf, extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
-from .llm import LLM, STR, arr, enum, obj
+from .llm import LLM, STR, AccountError, arr, enum, obj
 from .manuscript import build_docx, build_recommendation_docx
 from .docx_tools import build_pruefprotokoll_docx
 from .references import make_formatter
@@ -56,6 +56,11 @@ def _parallel(items, fn, log, label: str, workers: int = PARALLEL_WORKERS):
             except Exception as e:  # einzelne Fehler sollen den Rest nicht stoppen
                 results[key] = e
             log(f"{label}: {n}/{len(futs)} fertig")
+            if isinstance(results[key], AccountError):
+                # Kontoproblem (Guthaben, Limit, Schlüssel): sofort abbrechen statt jeden Punkt scheitern zu lassen
+                for f in futs:
+                    f.cancel()
+                raise results[key]
     return results
 
 

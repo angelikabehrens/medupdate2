@@ -202,6 +202,55 @@ def test_full_pipeline(monkeypatch=None):
     (Path(tempfile.gettempdir()) / "medupdate_test_DE.docx").write_bytes(out["manuskript_DE"])
 
 
+def test_llm_retry_and_cost():
+    import types
+
+    import anthropic
+    import httpx2 as httpx
+
+    from medupdate import llm as L
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    calls = {"n": 0}
+
+    class Stream:
+        def __enter__(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise anthropic.RateLimitError("rate", response=httpx.Response(429, request=req), body=None)
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            usage = types.SimpleNamespace(input_tokens=1_000_000, output_tokens=100_000, cache_creation_input_tokens=0,
+                                          cache_read_input_tokens=0,
+                                          server_tool_use=types.SimpleNamespace(web_search_requests=3))
+            return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text="ok")],
+                                         stop_reason="end_turn", usage=usage, model="claude-opus-5-5")
+
+    llm = L.LLM("x")
+    llm.client = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(
+        stream=lambda **kw: Stream())))
+    old_sleep, L.time.sleep = L.time.sleep, lambda s: None
+    try:
+        assert llm.text("hi") == "ok" and calls["n"] == 2
+    finally:
+        L.time.sleep = old_sleep
+    assert abs(llm.cost_usd - (4.0 + 2.0 + 0.03)) < 1e-6 and llm.web_searches == 3
+
+    def billing(**kw):
+        raise anthropic.BadRequestError("Your credit balance is too low", response=httpx.Response(400, request=req),
+                                        body=None)
+    llm.client = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=billing)))
+    try:
+        llm.text("hi")
+        raise AssertionError("Kontofehler erwartet")
+    except L.AccountError as ex:
+        assert "Guthaben" in str(ex)
+
+
 def test_search_broadening():
     from medupdate import recommend
     calls = []
@@ -248,6 +297,7 @@ def test_length_budget():
 
 
 if __name__ == "__main__":
+    test_llm_retry_and_cost()
     test_search_broadening()
     test_length_budget()
     test_full_pipeline()

@@ -12,8 +12,13 @@ MODEL_FAST = "claude-sonnet-5-5"
 WEB_SEARCH_TOOL = "web_search_20260209"
 WEB_FETCH_TOOL = "web_fetch_20260209"
 
-# Wie viele Publikationen gleichzeitig verarbeitet werden (Rate-Limits des Anthropic-Kontos beachten)
-PARALLEL_WORKERS = 3
+# Listenpreise in USD pro Million Token (Stand 10/2026, platform.claude.com/docs/en/about-claude/pricing)
+# und pro Websuche – nur für die Kostenanzeige in der App.
+PRICES = {
+    MODEL_MAIN: {"input": 4.0, "output": 20.0, "cache_write": 5.0, "cache_read": 0.20},
+    MODEL_FAST: {"input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.10},
+}
+PRICE_PER_WEB_SEARCH = 0.01
 
 # Literaturempfehlung: so viele PubMed-Kandidaten pro Thema werden höchstens bewertet
 MAX_CANDIDATES_PER_TOPIC = 60
@@ -28,3 +33,11 @@ def secret(name: str, default: str = "") -> str:
     except Exception:
         return default
     return str(value) if value else default
+
+
+# Wie viele Publikationen gleichzeitig verarbeitet werden. Neue Anthropic-Konten haben niedrige
+# Rate-Limits (Token pro Minute); bei häufigen Abbrüchen in den Secrets PARALLEL_WORKERS = "1" setzen.
+try:
+    PARALLEL_WORKERS = max(1, int(secret("PARALLEL_WORKERS", "2")))
+except ValueError:
+    PARALLEL_WORKERS = 2
