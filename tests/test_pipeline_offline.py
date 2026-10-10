@@ -1,0 +1,219 @@
+"""Offline-Test des Gesamtablaufs: KI, PubMed und Downloads werden simuliert.
+Aufruf: python -m pytest tests/  (oder python tests/test_pipeline_offline.py)"""
+
+import io
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import fitz
+from docx import Document
+
+from medupdate import guidelines, pipeline, pubmed, references
+
+APPRAISAL = """1. Strengths of the Study
+Randomized design with 1,200 patients (2).
+2. Weaknesses and Limitations
+Open-label design.
+3. Examination of the Authors' Conclusions
+Supported.
+4. Context within the Current Evidence Base
+Consistent with the guideline (3) and a meta-analysis (2).
+5. Clinical Practice Implications
+Relevant for adults.
+Comment
+A clear trial.
+Conclusion for Practice
+New, valid, practice changing for a subgroup.
+References
+1. Unused X. Not cited. J. 2020.
+2. Meta A, Analysis B. A meta-analysis. Lancet. 2025;400:1-10. PMID: 99999999
+3. German Society. S3 guideline. AWMF 2025."""
+
+SHORT = """Study: A randomized trial in 1,200 patients.
+Results: HR 0.80 (95% CI 0.70-0.90) (2).
+Authors' Conclusion: Effective.
+Conclusion for Practice: Practice changing for a subgroup (3)."""
+
+
+class FakeLLM:
+    def __init__(self):
+        self.calls = []
+
+    def text(self, prompt, **kw):
+        p = prompt if isinstance(prompt, str) else json.dumps(prompt, default=str)
+        self.calls.append(("text", p[:80]))
+        if "Leitlinien zum folgenden Thema" in p:
+            return "1. S3-Leitlinie Testthema, DGXX, 2025, https://register.awmf.org/x.pdf"
+        if "Du bist ein erfahrener klinisch-wissenschaftlicher Experte" in p:
+            return APPRAISAL
+        if "kürzt eine bereits erstellte kritische" in p:
+            return SHORT
+        if "gekürzte kritische Würdigung einer klinischen Studie vollständig ins" in p:
+            return SHORT.replace("Study:", "Studie:").replace("Results:", "Ergebnisse:").replace(
+                "Authors' Conclusion:", "Schlussfolgerung der Autoren:").replace(
+                "Conclusion for Practice:", "Fazit für die Praxis:").replace("0.80", "0,80").replace(
+                "0.70-0.90", "0,70-0,90")
+        if "State of the" in p and "Art" in p and "Baseline" in p:
+            return "State of the Art\nThe field is established (1). Gaps remain (2).\nReferences\n1. Guideline A. 2025.\n2. Review B. Lancet. 2024;1:1."
+        if "Übersetze den folgenden Absatz" in p:
+            return "Das Fachgebiet ist etabliert (1). Lücken bleiben (2)."
+        if "Schreibstil der Autorin" in p and "Analysiere" in p:
+            return "- kurze Sätze"
+        if "Passe den folgenden deutschen Text" in p:
+            return p.split("Text:\n", 1)[1]
+        return "OK"
+
+    def text_ex(self, prompt, **kw):
+        numbered = re.findall(r"^(\d+)\|\|\|(.*)$", prompt, re.MULTILINE)
+        return "\n".join(f"{n}|||{t}" for n, t in numbered), False
+
+    def json(self, prompt, schema, **kw):
+        p = prompt if isinstance(prompt, str) else json.dumps(prompt, default=str)
+        props = schema["properties"]
+        if "topics" in props:
+            return {"chapter_number": "8", "chapter_title": "Gastroenterologie",
+                    "topics": [{"number": "8.1.1", "title": "Thema Eins", "english_search_focus": "topic one",
+                                "section_number": "8.1", "section_title": "Abschnitt"},
+                               {"number": "8.1.2", "title": "Thema Zwei", "english_search_focus": "topic two",
+                                "section_number": "8.1", "section_title": "Abschnitt"}]}
+        if "citation_style" in props:
+            return {k: (0 if v.get("type") == "integer" else ([] if v.get("type") == "array" else ""))
+                    for k, v in props.items()} | {"max_pages": 20, "citation_style": "Vancouver", "recency_months": 12}
+        if "queries" in props:
+            return {"pico": "P", "queries": [{"name": "praezise", "query": "a"}, {"name": "breit", "query": "b"}],
+                    "exclusion": ""}
+        if "items" in props:
+            ids = re.findall(r"PMID: (\d+)", p)
+            # gerade n: Priorität A, ungerade n: B (geringe Praxisrelevanz); in "Thema Eins" fällt Fragestellung q1
+            # wegen geringer Relevanz heraus, damit "Thema Zwei" mehr Publikationen erhält
+            low = "Thema Eins" in p
+            return {"items": [{"pmid": i, "study_design": "RCT", "relevance": 40 if (low and n % 3 == 1) else 90,
+                               "evidence": 80 - n, "risk_of_bias": "Low", "novelty": 70,
+                               "practice_impact": 80 if n % 2 == 0 else 50, "question_importance": 90 - 10 * n,
+                               "journal_impact_factor": 50.0,
+                               "question_key": f"q{n % 3}", "is_primary_research": True, "rationale": "gut"}
+                              for n, i in enumerate(ids)]}
+        if "guidelines" in props:
+            return {"guidelines": [{"title": "S3-Leitlinie Test", "society": "DGXX", "year": "2025", "register_number": "",
+                                    "page_url": "", "pdf_url": "https://x/y.pdf", "freely_available": True,
+                                    "relevance": ""}]}
+        if "entries" in props:
+            ents = re.findall(r"^\d+\|\|\|(.*)$", p, re.MULTILINE)
+            return {"entries": ents}
+        if "index" in props:
+            return {"index": 0, "typ": "Abbildung", "caption_en": "Kaplan-Meier curve", "caption_de": "Kaplan-Meier-Kurve"}
+        if "assignments" in props:
+            return {"assignments": []}
+        if "befunde" in props:
+            return {"befunde": []}
+        if "kind" in props:
+            return {"title": "Unknown", "authors": [], "journal": "", "year": "", "doi": "", "kind": "other"}
+        raise AssertionError(f"unerwartetes Schema {list(props)}")
+
+
+def _rec(pmid):
+    return {"pmid": pmid, "title": f"Trial number {pmid} of something important", "abstract": "A" * 400 + " results.",
+            "authors": ["Smith J", "Doe A", "Roe B", "Poe C"], "journal": "N Engl J Med", "journal_full": "",
+            "year": "2026", "volume": "394", "issue": "2", "pages": "100-110", "doi": f"10.1056/x{pmid}",
+            "pmc": "", "pub_types": ["Randomized Controlled Trial"], "language": "eng"}
+
+
+def _pdf_with_image(text: str) -> bytes:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 72), text)
+    pix = fitz.Pixmap(fitz.csRGB, 400, 300, os.urandom(400 * 300 * 3), False)  # Rauschen: groß genug
+    page.insert_image(fitz.Rect(50, 100, 450, 400), pixmap=pix)
+    return doc.tobytes()
+
+
+def _template() -> bytes:
+    d = Document()
+    for name in ("MainTitle1", "StandardTitle2", "Author", "Biblio", "BiblioTitle1", "ImageSubtitle", "Toc1", "Toc2"):
+        d.styles.add_style(name, 1)
+    d.add_paragraph("8\tGastroenterologie", style="MainTitle1")
+    d.add_paragraph("Interessenkonflikte")
+    d.add_paragraph("StandardTitle2 Beispiel", style="StandardTitle2")
+    b = io.BytesIO()
+    d.save(b)
+    return b.getvalue()
+
+
+def test_full_pipeline(monkeypatch=None):
+    counter = iter(range(10000000, 10001000))
+    pubmed.search = lambda q, n, email="": ([str(next(counter)) for _ in range(6)], 6)
+    pubmed.fetch_records = lambda ids, email="": {i: _rec(i) for i in ids}
+    pubmed.find_pmid = lambda doi="", title="", email="": None
+    pipeline.unpaywall = lambda doi, email: {"is_oa": False}
+    pipeline.fetch_oa_pdf = lambda doi, email: None
+    guidelines.download_pdf = lambda url: _pdf_with_image("Leitlinie Empfehlung " * 400)
+    references.pubmed.find_pmid = lambda **kw: None
+
+    llm = FakeLLM()
+    proj = pipeline.new_project()
+    proj["email"] = "test@example.org"
+    log = lambda m: print("LOG", m)
+    pipeline.run_intake(llm, proj, "8 Gastro\n8.1 Thema Eins\n8.2 Thema Zwei", "Hinweise", ("t.docx", _template()), log)
+    pipeline.run_recommendations(llm, proj, log)
+    pipeline.run_guideline_search(llm, proj, log)
+    t1, t2 = proj["topics"]["T1"], proj["topics"]["T2"]
+    assert len(t1["recommended"]) == 2 and len(t2["recommended"]) == 3, "nur Priorität A, eine je Fragestellung"
+    assert all(t["ranking"][p]["priority"] == "A" for t in (t1, t2) for p in t["recommended"])
+    assert len(set(proj["length_plan"]["tiers"].values())) > 1, "Länge richtet sich nach der Qualität"
+    assert proj["topics"]["T1"]["guidelines"][0]["text"]
+    pipeline.recommendation_docx(proj)
+
+    first = proj["topics"]["T1"]["recommended"][0]
+    rec = proj["records"][first]
+    uploads = {"a.pdf": _pdf_with_image(f"{rec['title']} Smith J et al. " + "body text " * 500)}
+    pipeline.match_uploads(llm, proj, uploads, log)
+    assert proj["uploads"]["a.pdf"]["pmid"] == first
+    proj["style"]["alt.docx"] = "Früheres Manuskript. " * 300
+    pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True})
+    assert not proj["errors"], proj["errors"]
+    out = proj["outputs"]
+    doc = Document(io.BytesIO(out["manuskript_DE"]))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Fazit für die Praxis" in text and "Studie:" in text
+    assert "Biblio" in {p.style.name for p in doc.paragraphs}
+    biblio = [p.text for p in doc.paragraphs if p.style.name == "Biblio"]
+    # 6 Publikationen + je Thema 2 SotA-Quellen + Meta-Analyse + Leitlinie
+    print("\n".join(biblio))
+    assert any("Smith J, Doe A, Roe B et al" in b for b in biblio)
+    assert not any("Unused X" in b for b in biblio), "nicht zitierte Quelle darf nicht erscheinen"
+    raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
+    assert raw.count("State of the Art") == 1, "nur ein State of the Art je Hauptabschnitt"
+    i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „Thema Zwei“")
+    assert i_sota == i_t2 + 1, "State of the Art vor dem Thema mit den meisten Publikationen"
+    n_img = sum(1 for p in doc.paragraphs if p.text.startswith("Abb."))
+    assert n_img >= 1, "Abbildung erwartet"
+    print("BEFUNDE")
+    for b in out["befunde"]:
+        print(b["status"], b["punkt"], "–", b["begruendung"][:100])
+    blob = pipeline.export_project(proj)
+    again = pipeline.import_project(blob)
+    assert again["outputs"]["manuskript_DE"] == out["manuskript_DE"]
+    Path("/tmp/claude-0/-home-claude/e220893b-f592-5364-ac2c-a520ed8bbd4a/scratchpad/test_DE.docx").write_bytes(out["manuskript_DE"])
+
+
+def test_length_budget():
+    from medupdate.appraisal import plan_tiers
+    pubs = [{"id": str(i), "length_score": s} for i, s in enumerate([90, 85, 70, 60, 50])]
+    tiers, overflow = plan_tiers(pubs, {}, 1)
+    assert tiers["0"] == "1,5 Seiten (Lang)" and tiers["2"] == "1 Seite" and tiers["4"] == "½ Seite (Kurz)"
+    tiers, overflow = plan_tiers(pubs, {"max_pages": 4}, 1)
+    assert overflow and overflow[0] == "4", "die schwächste Arbeit fällt zuerst heraus"
+    assert all(t == "½ Seite (Kurz)" for t in tiers.values())
+    tiers, overflow = plan_tiers(pubs, {"max_pages": 6}, 1)
+    assert not overflow and tiers["0"] != "½ Seite (Kurz)" and tiers["4"] == "½ Seite (Kurz)"
+
+
+if __name__ == "__main__":
+    test_length_budget()
+    test_full_pipeline()
+    print("OK")

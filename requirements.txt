@@ -1,0 +1,7 @@
+streamlit>=1.40
+anthropic>=1.13
+requests
+python-docx
+pypdf
+pymupdf
+pillow
