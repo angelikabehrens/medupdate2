@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -265,7 +266,7 @@ def _pub_list(proj: dict) -> list[tuple[str, str]]:
     return out
 
 
-def _guideline_docs(proj: dict, tid: str, query: str, per_doc: int = 12000, total: int = 30000) -> list:
+def _guideline_docs(proj: dict, tid: str, query: str, per_doc: int = 6000, total: int = 14000) -> list:
     docs = []
     t = proj["topics"][tid]
     for g in t.get("guidelines", []):
@@ -287,7 +288,13 @@ def _guideline_docs(proj: dict, tid: str, query: str, per_doc: int = 12000, tota
 def _entry(rec: dict, pub: dict) -> dict:
     return {"title": rec.get("title", ""), "journal": rec.get("journal", ""), "pubdate": rec.get("year", ""),
             "pub_types": rec.get("pub_types") or ["(unbekannt)"], "abstract": rec.get("abstract") or "(kein Abstract)",
-            "full_text": (pub.get("full_text") or "")[:60000]}
+            "full_text": _main_text(pub.get("full_text") or "")[:35000]}
+
+
+def _main_text(text: str) -> str:
+    """Volltext ohne Literaturverzeichnis und Anhang (spart Token, enthält keine Ergebnisse)."""
+    m = re.search(r"\n\s*(References|REFERENCES|Literatur|Bibliography)\s*\n", text[len(text) // 3:])
+    return text[: len(text) // 3 + m.start()] if m else text
 
 
 FIG_SCHEMA = obj({"index": {"type": "integer"}, "typ": enum("Tabelle", "Abbildung"), "caption_en": STR,
@@ -326,6 +333,10 @@ def _pick_figure(llm: LLM, title: str, images: list[bytes]) -> dict | None:
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     pubs = _pub_list(proj)
+    if options.get("trial"):
+        # Probelauf: erstes Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur einen Bruchteil
+        first = next((t for _, t in pubs), None)
+        pubs = [(p, t) for p, t in pubs if t == first][:2]
     log(f"{len(pubs)} Publikationen in {len({t for _, t in pubs})} Themen werden verarbeitet.")
 
     # 1. Volltexte (Upload oder Open Access) und Abbildungen
@@ -368,7 +379,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             main = pubmed.format_reference(proj["records"].get(p, {}))
             body, lit = dedupe_local_literature(body, [main] + entries)
             d["body_en"], d["literature"] = strip_appraisal_preamble(body), lit
-    if not proj.get("tiers") or options.get("replan_tiers"):
+    if not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready):
         # Selbst ausgewählte Arbeiten werden nicht verworfen: im Notfall alle auf ½ Seite, Hinweis im Protokoll
         tiers, overflow = A.plan_tiers(_length_info(proj, ready), proj.get("rules") or {},
                                        _n_sections(proj, {t for _, t in ready}))
@@ -419,7 +430,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
 
     def sota(tid):
         title = proj["topics"][tid]["title"]
-        en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=6000, total=18000))
+        en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=5000, total=12000))
         return {"sota_en": en, "sota_de": A.translate_sota(llm, en)}
 
     if options.get("sota", True):
@@ -463,6 +474,9 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         log("Abbildungen werden ausgewählt…")
         for p, res in _parallel([(p, p) for p in cand], fig, log, "Abbildungen").items():
             proj["pubs"][p]["figure"] = None if isinstance(res, Exception) else res
+    for p, _ in ready:  # Speicher freigeben: Kandidatenbilder werden nicht mehr gebraucht
+        if "figure" in proj["pubs"][p]:
+            proj["pubs"][p].pop("images", None)
 
     # 9. Manuskripte zusammensetzen, Literatur zusammenführen, Formatvorlage, formale Prüfung
     log("Gesamtmanuskript wird zusammengesetzt und formal geprüft…")
@@ -570,7 +584,30 @@ def _dec(d):
 
 
 def export_project(proj: dict) -> bytes:
-    return json.dumps(proj, default=_enc, ensure_ascii=False).encode("utf-8")
+    """Zwischenstand ohne PDFs und Kandidatenbilder (die Texte sind enthalten) – hält die Datei klein."""
+    slim = dict(proj)
+    slim["pubs"] = {p: {k: v for k, v in d.items() if k not in ("pdf", "images")} for p, d in proj["pubs"].items()}
+    return json.dumps(slim, default=_enc, ensure_ascii=False).encode("utf-8")
+
+
+def partial_docx(proj: dict) -> bytes | None:
+    """Alle bisher fertigen Würdigungen als Word-Datei (beste verfügbare Fassung), auch nach einem Abbruch."""
+    blocks = []
+    for tid, t in proj["topics"].items():
+        pubs = []
+        for p, d in proj["pubs"].items():
+            if p in t.get("selected", t.get("recommended", [])) or (d.get("extra") and d.get("topic_id") == tid):
+                text = d.get("styled_de") or d.get("short_de") or d.get("short_en") or d.get("body_en")
+                if text:
+                    rec = proj["records"].get(p, {})
+                    pubs.append({"title": rec.get("title", p), "rec": rec, "abstract": None,
+                                 "lines": [x for x in text.split("\n") if x.strip()],
+                                 "literature": d.get("literature", []), "figure": None})
+        if pubs:
+            blocks.append({"topic": t["title"], "sota": t.get("sota_de"), "pubs": pubs})
+    if not blocks:
+        return None
+    return build_docx("Bisherige Ergebnisse (unvollständig)", blocks, "Deutsch")
 
 
 def import_project(data: bytes) -> dict:

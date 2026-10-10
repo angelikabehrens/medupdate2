@@ -58,8 +58,10 @@ Test ohne Internet: `python tests/test_pipeline_offline.py`
 - Es wird nichts dauerhaft auf dem Server gespeichert. Zwischenstand und Word-Dateien immer herunterladen.
 - Ein vollständiger Durchlauf dauert je nach Zahl der Publikationen deutlich länger als in MyLuo, weil alle
   Schritte nacheinander automatisch laufen. Die Seite dabei geöffnet lassen.
-- Kosten: Die App zeigt nach jedem Lauf die geschätzten KI-Kosten (Listenpreise) an. Größter Posten ist die
-  kritische Würdigung mit Websuche (etwa 1–2 USD pro Publikation).
+- Kosten: Die App misst die KI-Kosten (Listenpreise) und zeigt sie nach jedem Lauf an. Für Schritt 2 gibt es
+  ein Kostenlimit pro Lauf und einen Probelauf (erstes Thema, höchstens 2 Publikationen). Größter Posten ist
+  die kritische Würdigung mit Websuche; der Kontext wird dafür zwischengespeichert (Prompt-Caching).
+- Nach einem Abbruch lassen sich alle bis dahin fertigen Würdigungen als Word-Datei herunterladen.
 - Neue Anthropic-Konten haben niedrige Rate-Limits (Token pro Minute). Die App wartet dann automatisch;
   bricht sie trotzdem ab, `PARALLEL_WORKERS = "1"` setzen. Ein erneuter Start setzt an derselben Stelle fort.
 - Das Ergebnis ist ein Entwurf: Zahlen, Zitate und Literatur vor der Abgabe prüfen (siehe Prüfprotokoll).

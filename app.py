@@ -88,11 +88,15 @@ with st.expander("👋 So funktioniert medupdate 2", expanded=not proj.get("toc"
     )
 
 
-def get_llm() -> LLM | None:
+def out_any(p: dict) -> bool:
+    return bool((p.get("outputs") or {}).get("manuskript_DE"))
+
+
+def get_llm(budget_usd: float = 0.0) -> LLM | None:
     if not api_key:
         st.warning("Bitte zuerst den Anthropic-API-Schlüssel in der Seitenleiste eingeben.")
         return None
-    return LLM(api_key)
+    return LLM(api_key, budget_usd=budget_usd)
 
 
 def run_with_status(label: str, fn, llm: LLM | None = None) -> None:
@@ -248,10 +252,10 @@ if any("recommended" in t for t in proj["topics"].values()):
 
     wanted = pipeline.selected_pmids(proj)
     n_sec = len({t.get("section_number") or tid for tid, t in proj["topics"].items() if t.get("enabled", True)})
-    st.info(f"Geschätzte KI-Kosten für Schritt 2: etwa {len(wanted) * 1.2 + n_sec * 0.4 + 2:.0f}–"
-            f"{len(wanted) * 2.0 + n_sec * 0.8 + 4:.0f} USD für {len(wanted)} Publikationen "
-            "(kritische Würdigung mit Websuche ist der größte Posten). Die tatsächlichen Kosten zeigt die App "
-            "nach jedem Lauf an.")
+    st.info(f"Grobe Schätzung der KI-Kosten für Schritt 2: etwa {len(wanted) * 0.6 + n_sec * 0.3 + 1:.0f}–"
+            f"{len(wanted) * 1.5 + n_sec * 0.6 + 3:.0f} USD für {len(wanted)} Publikationen. Die tatsächlichen "
+            "Kosten misst die App und zeigt sie nach jedem Lauf an; das Kostenlimit unten hält den Lauf "
+            "rechtzeitig an.")
     missing_ft = [p for p in wanted if not proj["pubs"].get(p, {}).get("full_text")
                   and not proj["records"].get(p, {}).get("is_oa")]
     if missing_ft:
@@ -282,10 +286,16 @@ if any("recommended" in t for t in proj["topics"].values()):
         opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
         opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
+        b1, b2 = st.columns(2)
+        opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
+                                "vollständigen Lauf)", value=not out_any(proj))
+        opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
+                                     help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
+                                          "ein erneuter Start setzt dort fort.")
         go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen")
 
     if go2:
-        llm = get_llm()
+        llm = get_llm(float(opt_budget))
         if llm:
             uploads = {f.name: f.read() for f in (pub_files or [])}
             for f in style_files or []:
@@ -299,11 +309,16 @@ if any("recommended" in t for t in proj["topics"].values()):
             def step2(log):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
-                pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style})
+                pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
+                                                         "trial": opt_trial})
 
             run_with_status("Manuskript wird erstellt", step2, llm)
 
     out = proj.get("outputs") or {}
+    partial = pipeline.partial_docx(proj) if any(d.get("body_en") for d in proj["pubs"].values()) else None
+    if partial:
+        st.download_button("⬇️ Bisher fertige Würdigungen herunterladen (auch nach Abbruch)", partial,
+                           f"Bisherige_Ergebnisse_{date.today().isoformat()}.docx", DOCX_MIME)
     if out.get("manuskript_DE"):
         st.subheader("Ergebnis")
         d1, d2, d3 = st.columns(3)

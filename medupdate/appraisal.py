@@ -20,6 +20,10 @@ from .citations import (
 from .config import MODEL_FAST, MODEL_MAIN
 from .llm import LLM
 
+# Höchstzahl Websuchen je kritischer Würdigung. Jede Suchrunde verarbeitet den ganzen Kontext erneut –
+# das ist der größte Kostenfaktor der App.
+WEB_SEARCHES = 4
+
 # Längenstufen nach dem Skill "studien-wuerdigung" (Seitenäquivalent für die Umfangsplanung)
 TIER_PAGES = {"Kurznachricht": 0.2, "½ Seite (Kurz)": 0.5, "1 Seite": 1.0, "1,5 Seiten (Lang)": 1.5,
               "2 Seiten": 2.0}
@@ -62,8 +66,8 @@ def generate_appraisal(llm: LLM, entry: dict, docs: list[tuple[str, str]], sprac
     """entry: title, journal, pubdate, pub_types, abstract, full_text (optional)."""
     fulltext_block = (f"\nVolltext (Auszug, automatisch geladen oder hochgeladen):\n{entry['full_text']}\n"
                       if entry.get("full_text") else "")
-    prompt = M.appraisal_prompt(entry, sprache_kw, fulltext_block, background_block(docs), max_websuchen=10)
-    text = llm.text(prompt, model=MODEL_MAIN, web_search=10, max_tokens=32000, effort="high")
+    prompt = M.appraisal_prompt(entry, sprache_kw, fulltext_block, background_block(docs), max_websuchen=WEB_SEARCHES)
+    text = llm.text(prompt, model=MODEL_MAIN, web_search=WEB_SEARCHES, max_tokens=32000, effort="high")
     text = fix_citation_consistency(llm, text, sprache_kw)
     return renumber_and_prune_citations(text)
 
@@ -155,7 +159,7 @@ def generate_sota(llm: LLM, thema_text: str, sprache_kw: str, guideline_docs: li
             "Baseline-Evidenz und zitiere sie wie gefundene Quellen:\n\n"
             + "\n\n".join(f"--- {n} ---\n{t[:6000]}" for n, t in guideline_docs)
         )
-    raw = llm.text(prompt, model=MODEL_MAIN, web_search=6, max_tokens=6000, effort="high")
+    raw = llm.text(prompt, model=MODEL_MAIN, web_search=4, max_tokens=6000, effort="high")
     body, entries = split_sota_response(raw)
     if not body:
         raise ValueError("Die KI hat für den State of the Art keine (leere) Antwort geliefert.")

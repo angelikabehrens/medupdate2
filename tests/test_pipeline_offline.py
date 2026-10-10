@@ -175,6 +175,10 @@ def test_full_pipeline(monkeypatch=None):
     pipeline.match_uploads(llm, proj, uploads, log)
     assert proj["uploads"]["a.pdf"]["pmid"] == first
     proj["style"]["alt.docx"] = "Früheres Manuskript. " * 300
+    pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "trial": True})
+    done = [p for p, d in proj["pubs"].items() if d.get("appraisal_en")]
+    assert len(done) == 2, "Probelauf: höchstens 2 Publikationen"
+    assert pipeline.partial_docx(proj)
     pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True})
     assert not proj["errors"], proj["errors"]
     out = proj["outputs"]
@@ -230,12 +234,25 @@ def test_llm_retry_and_cost():
             return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text="ok")],
                                          stop_reason="end_turn", usage=usage, model="claude-opus-5-5")
 
+    seen = {}
+
+    def stream(**kw):
+        seen.update(kw)
+        return Stream()
+
     llm = L.LLM("x")
-    llm.client = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(
-        stream=lambda **kw: Stream())))
+    llm.client = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream)))
     old_sleep, L.time.sleep = L.time.sleep, lambda s: None
     try:
-        assert llm.text("hi") == "ok" and calls["n"] == 2
+        assert llm.text("hi", web_search=4) == "ok" and calls["n"] == 2
+        assert seen["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+        llm.budget_usd = 5.0  # bereits ≈ 6 USD verbraucht → nächster Aufruf wird verweigert
+        try:
+            llm.text("hi")
+            raise AssertionError("Kostenlimit muss greifen")
+        except L.BudgetExceeded:
+            pass
+        llm.budget_usd = 0.0
     finally:
         L.time.sleep = old_sleep
     assert abs(llm.cost_usd - (4.0 + 2.0 + 0.03)) < 1e-6 and llm.web_searches == 3

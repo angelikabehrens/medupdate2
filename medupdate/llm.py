@@ -33,6 +33,10 @@ class AccountError(RuntimeError):
     """Problem mit dem Anthropic-Konto (Guthaben, Ausgabenlimit, Schlüssel) – Wiederholen hilft nicht."""
 
 
+class BudgetExceeded(AccountError):
+    """Das in der App eingestellte Kostenlimit für diesen Lauf ist erreicht."""
+
+
 # Wartezeiten bei Rate-Limit/Überlastung: lange genug, dass sich das Minutenkontingent erholt
 _WAITS = [20, 40, 60, 90, 120, 120, 120]
 
@@ -60,8 +64,9 @@ def _explain(ex: Exception) -> Exception:
 
 
 class LLM:
-    def __init__(self, api_key: str, on_wait=None):
+    def __init__(self, api_key: str, on_wait=None, budget_usd: float = 0.0):
         self.client = anthropic.Anthropic(api_key=api_key, max_retries=2, timeout=900.0)
+        self.budget_usd = budget_usd  # 0 = kein Limit
         self.cost_usd = 0.0
         self.web_searches = 0
         self._lock = threading.Lock()
@@ -103,6 +108,18 @@ class LLM:
         output_config: dict = {"effort": effort}
         if output_format:
             output_config["format"] = output_format
+        if self.budget_usd and self.cost_usd >= self.budget_usd:
+            raise BudgetExceeded(
+                f"Das eingestellte Kostenlimit von {self.budget_usd:.0f} USD für diesen Lauf ist erreicht "
+                f"(≈ {self.cost_usd:.2f} USD verbraucht). Alles bis hierhin Erledigte bleibt erhalten; "
+                "ein erneuter Start setzt dort fort.")
+        if tools:
+            # Bei Websuche wird der Kontext in jeder Suchrunde erneut verarbeitet: mit Cache-Markierung
+            # kosten diese Wiederholungen nur noch einen Bruchteil (Suchergebnisse cacht die API dann selbst).
+            messages = [dict(m) for m in messages]
+            last = messages[-1]
+            if isinstance(last.get("content"), str):
+                last["content"] = [{"type": "text", "text": last["content"], "cache_control": {"type": "ephemeral"}}]
         kwargs: dict = {
             "model": model,
             "max_tokens": max_tokens,
