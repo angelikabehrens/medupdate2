@@ -268,6 +268,24 @@ def test_llm_retry_and_cost():
         assert "Guthaben" in str(ex)
 
 
+def test_results_saved_before_abort():
+    from medupdate.llm import BudgetExceeded
+    store = {}
+
+    def fn(i):
+        if i == 3:
+            raise BudgetExceeded("Limit")
+        return i * 10
+
+    try:
+        for k, v in pipeline._parallel([(i, i) for i in range(6)], fn, lambda m: None, "x", workers=1).items():
+            store[k] = v
+        raise AssertionError("Abbruch erwartet")
+    except BudgetExceeded:
+        pass
+    assert store == {0: 0, 1: 10, 2: 20}, store
+
+
 def test_search_broadening():
     from medupdate import recommend
     calls = []
@@ -315,6 +333,7 @@ def test_length_budget():
 
 if __name__ == "__main__":
     test_llm_retry_and_cost()
+    test_results_saved_before_abort()
     test_search_broadening()
     test_length_budget()
     test_full_pipeline()

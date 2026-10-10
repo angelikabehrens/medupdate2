@@ -8,6 +8,7 @@ import base64
 import gzip
 import json
 import re
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -44,26 +45,60 @@ def _err(proj: dict, where: str, ex: Exception) -> None:
     traceback.print_exc()
 
 
-def _parallel(items, fn, log, label: str, workers: int = PARALLEL_WORKERS):
-    """Führt fn(item) parallel aus; gibt {item_key: Ergebnis oder Exception} zurück."""
-    results = {}
-    if not items:
-        return results
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(fn, it): key for key, it in items}
-        for n, fut in enumerate(as_completed(futs), start=1):
-            key = futs[fut]
+class _Skipped(Exception):
+    """Aufgabe wurde nach einem Konto-/Kostenlimit-Stopp nicht mehr gestartet."""
+
+
+class _Streamed:
+    """Ergebnis von _parallel: .items() liefert jedes Ergebnis, SOBALD es fertig ist. Die Aufrufer
+    speichern es so sofort im Projekt – bricht der Lauf später ab, ist bereits Bezahltes nicht verloren."""
+
+    def __init__(self, items, fn, log, label, workers):
+        self.args = (list(items), fn, log, label, workers)
+
+    def items(self):
+        items, fn, log, label, workers = self.args
+        if not items:
+            return
+        stop: Exception | None = None
+        halt = threading.Event()
+
+        def guarded(it):
+            if halt.is_set():
+                raise _Skipped()
             try:
-                results[key] = fut.result()
-            except Exception as e:  # einzelne Fehler sollen den Rest nicht stoppen
-                results[key] = e
-            log(f"{label}: {n}/{len(futs)} fertig")
-            if isinstance(results[key], AccountError):
-                # Kontoproblem (Guthaben, Limit, Schlüssel): sofort abbrechen statt jeden Punkt scheitern zu lassen
-                for f in futs:
-                    f.cancel()
-                raise results[key]
-    return results
+                return fn(it)
+            except AccountError:
+                halt.set()  # sofort im Arbeits-Thread, damit keine weitere Anfrage mehr startet
+                raise
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(guarded, it): key for key, it in items}
+            for n, fut in enumerate(as_completed(futs), start=1):
+                key = futs[fut]
+                if fut.cancelled():
+                    continue
+                try:
+                    res = fut.result()
+                except _Skipped:
+                    continue
+                except Exception as e:  # einzelne Fehler sollen den Rest nicht stoppen
+                    res = e
+                log(f"{label}: {n}/{len(futs)} fertig")
+                if isinstance(res, AccountError):
+                    # Kontoproblem oder Kostenlimit: nichts Neues mehr starten, bereits laufende Aufrufe
+                    # (schon bezahlt) aber noch abholen und speichern
+                    stop = stop or res
+                    for f in futs:
+                        f.cancel()
+                    continue
+                yield key, res
+        if stop:
+            raise stop
+
+
+def _parallel(items, fn, log, label: str, workers: int = PARALLEL_WORKERS) -> _Streamed:
+    return _Streamed(items, fn, log, label, workers)
 
 
 # ======================================================================
@@ -199,6 +234,12 @@ def match_uploads(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
     unmatched = []
     for name, data in uploads.items():
         if name in proj["uploads"]:
+            # Bereits zugeordnet (z.B. aus einem geladenen Zwischenstand ohne PDFs): PDF nur für die
+            # Abbildungsauswahl wieder anhängen, Text und Zuordnung bleiben
+            pm = proj["uploads"][name].get("pmid")
+            d = proj["pubs"].get(pm or "", {})
+            if pm and "pdf" not in d and "images" not in d:
+                d["pdf"] = data
             continue
         text = extract_pdf_text(data)
         hit = next((p for p, rec in wanted.items() if upload_matches(text, rec)), None)
@@ -352,7 +393,9 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                 if looks_like_real_fulltext(text, rec.get("abstract", "")):
                     d["pdf"], d["full_text"], d["fulltext_source"] = pdf, text, "Open Access"
         if d.get("pdf") and "images" not in d and options.get("figures", True):
-            d["images"] = extract_images_from_pdf(d["pdf"], max_images=15)
+            d["images"] = extract_images_from_pdf(d["pdf"], max_images=8)
+        if d.get("full_text") and ("images" in d or not options.get("figures", True)):
+            d.pop("pdf", None)  # Text und Bildkandidaten sind extrahiert: PDF nicht mehr im Speicher halten
 
     # 2. Kritische Würdigung (englisch, wie in MyLuo als Arbeitsfassung)
     todo = [(p, (p, t)) for p, t in pubs if not proj["pubs"][p].get("appraisal_en")]
