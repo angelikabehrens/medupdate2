@@ -579,8 +579,8 @@ Abstract-Block, KEIN Kommentar, KEIN eigener Fazit-Absatz, KEINE Labels wie "Ker
 
 Richtwerte für die Gewichtung:
 - Design, Setting, Fallzahl, Intervention/Kontrolle, primärer Endpunkt: ca. 25%
-- Hauptergebnis mit Effektgröße, 95%-Konfidenzintervall und p-Wert; ggf. ein zentrales sekundäres \
-Ergebnis: ca. 30%
+- Hauptergebnis mit Effektgröße und 95%-Konfidenzintervall; ggf. ein zentrales sekundäres \
+Ergebnis in Worten: ca. 30%
 - Wichtigste Validitätseinschränkungen mit Bias-Richtung und knappes Validitätsurteil: ca. 25%
 - Neuheit/Einordnung in einem Halbsatz: ca. 5-10%
 - Letzter Satz (ohne Label): die Kernaussage der Publikation – die Hauptbotschaft der Autoren MIT \
@@ -648,7 +648,7 @@ Leitfrage (muss in jeder Stufe erkennbar beantwortet werden – implizit im Flie
 3. Sollten sie die klinische Praxis verändern, und wenn ja, für wen?
 
 Priorisierung nach wissenschaftlicher Bedeutung (je kürzer die Stufe, desto strenger einhalten):
-1. Primärer Endpunkt mit Effektgröße, Konfidenzintervall und p-Wert
+1. Primärer Endpunkt mit Effektgröße und Konfidenzintervall
 2. Validitätsprobleme mit Einfluss auf die Hauptaussage, samt Gesamturteil
 3. Aussage zur Praxis mit Einschränkungen und Übertragbarkeit bzw. Fazit
 4. Schlussfolgerung/Kernaussage der Autoren
@@ -690,7 +690,19 @@ kürzesten Stufe ("½ Seite") darf die Einordnung nicht komplett ohne jeden exte
 nur weil dieser Abschnitt gekürzt wird. Ein knapper Halbsatz mit Verweis reicht.
 
 Stil: ganze, gut verständliche Sätze mit so wenig Wörtern wie möglich. Kein Telegrammstil, keine \
-Aufzählungen im Fließtext. Vermeide die Ich-/Wir-Form der Originalautoren (siehe getrennte \
+Aufzählungen im Fließtext.
+
+SATZBAU UND STATISTIK – gut lesbar statt überladen:
+- Kurze, klare Sätze: möglichst höchstens 20–25 Wörter, eine Hauptaussage pro Satz. Keine \
+verschachtelten Nebensatzketten und keine langen Klammereinschübe. Teile überladene Sätze lieber in \
+zwei Sätze, als Informationen hineinzupressen.
+- Sparsam mit Statistik: Das Hauptergebnis erhält Effektgröße und 95%-Konfidenzintervall; den p-Wert \
+nur, wenn kein Konfidenzintervall vorliegt oder er für die Aussage entscheidend ist. Sekundäre \
+Endpunkte, Subgruppen und Sicherheitsdaten nur mit der wichtigsten Zahl oder in Worten \
+(z.B. "ohne signifikanten Unterschied", "etwa halbiert"), ohne vollständige Statistik.
+- Höchstens zwei Zahlenangaben pro Satz.
+- Wesentliche Inhalte bleiben erhalten: Was für die Leitfrage, die Validität oder die Praxis zählt, \
+wird nicht gestrichen, sondern nur einfacher formuliert. Zahlen, die du übernimmst, bleiben exakt. Vermeide die Ich-/Wir-Form der Originalautoren (siehe getrennte \
 Stilvorgabe, sofern bereits angewendet).
 
 Ausgabe: Gib ausschließlich den fertigen Text aus, keine Überschrift wie "Zusammenfassung", keine \

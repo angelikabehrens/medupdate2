@@ -34,6 +34,9 @@ from .references import make_formatter
 
 
 
+# Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10)
+SHORT_VERSION = 2
+
 def new_project() -> dict:
     return {"version": 1, "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
             "template": None, "topics": {}, "records": {}, "pubs": {}, "uploads": {}, "style": {},
@@ -433,7 +436,14 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     for p, _ in ready:
         proj["tiers"].setdefault(p, "½ Seite (Kurz)")
 
-    # 4. Kürzung (englisch)
+    # 4. Kürzung (englisch). Auf Wunsch werden ältere Kürzungen (vor SHORT_VERSION) neu erstellt; dann
+    # auch Übersetzung und Stilfassung, die darauf aufbauen.
+    if options.get("reshorten"):
+        for p, _ in ready:
+            d = proj["pubs"][p]
+            if d.get("short_en") and d.get("short_v", 1) < SHORT_VERSION:
+                for k in ("short_en", "short_de", "styled_de", "style_ok"):
+                    d.pop(k, None)
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_en")]
 
     def shorten(p):
@@ -446,7 +456,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             _err(proj, f"Kürzung {p}", res)
             proj["pubs"][p]["short_en"] = proj["pubs"][p]["body_en"]  # ungekürzt weiterverwenden
         else:
-            proj["pubs"][p]["short_en"] = res
+            proj["pubs"][p]["short_en"], proj["pubs"][p]["short_v"] = res, SHORT_VERSION
 
     # 5. Übersetzung ins Deutsche
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_de")]

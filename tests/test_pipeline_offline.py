@@ -226,6 +226,11 @@ def test_full_pipeline(monkeypatch=None):
     print("BEFUNDE")
     for b in out["befunde"]:
         print(b["status"], b["punkt"], "–", b["begruendung"][:100])
+    old = next(p for p, d in proj["pubs"].items() if d.get("short_en"))
+    proj["pubs"][old]["short_v"] = 1
+    proj["pubs"][old]["short_en"] = "ALT"
+    pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "reshorten": True})
+    assert proj["pubs"][old]["short_en"] != "ALT" and proj["pubs"][old]["short_v"] == pipeline.SHORT_VERSION
     blob = pipeline.export_project(proj)
     again = pipeline.import_project(blob)
     assert again["outputs"]["manuskript_DE"] == out["manuskript_DE"]

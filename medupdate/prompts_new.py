@@ -220,7 +220,9 @@ ist; Fachbegriffe und etablierte Abkürzungen beibehalten. Arzneimittel nur mit 
 "CI" wird im Fließtext zu "Konfidenzintervall", in Zahlenklammern zu "95%-KI". Keine Ich-/Wir-Form.
 
 Klammerverweise wie "(1)" oder "(2,3)" bleiben exakt an derselben Stelle im Satz stehen. Absatzstruktur \
-beibehalten (eine Zeile pro Absatz). Gib NUR die Übersetzung aus, ohne Einleitung oder Kommentar.
+beibehalten (eine Zeile pro Absatz). Schreibe gut lesbare deutsche Sätze: Einen langen, verschachtelten \
+Satz darfst du in zwei kürzere Sätze teilen, ohne Inhalt wegzulassen. Gib NUR die Übersetzung aus, ohne \
+Einleitung oder Kommentar.
 
 Text:
 {text}"""
@@ -259,6 +261,8 @@ bleiben exakt erhalten.
 - Absatzstruktur und Labels am Absatzanfang (z.B. "Studie:", "Ergebnisse:", "Schlussfolgerung der \
 Autoren:", "Kommentar:", "Fazit für die Praxis:") bleiben unverändert erhalten; eine Zeile pro Absatz.
 - Länge ungefähr gleich (±10 %).
+- Kurze, klare Sätze (möglichst höchstens 20–25 Wörter), keine Schachtelsätze, auch wenn die \
+Beispieltexte längere Sätze haben. Verschachtelte Sätze in zwei Sätze teilen.
 - Gib NUR den überarbeiteten Text aus.
 
 Text:

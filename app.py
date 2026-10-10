@@ -295,6 +295,12 @@ if any("recommended" in t for t in proj["topics"].values()):
         opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
                                      help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
                                           "ein erneuter Start setzt dort fort.")
+        n_old = sum(1 for d in proj.get("pubs", {}).values()
+                    if d.get("short_en") and d.get("short_v", 1) < pipeline.SHORT_VERSION)
+        opt_reshorten = st.checkbox(
+            f"Bereits gekürzte Würdigungen neu kürzen (kürzere Sätze, weniger Statistik; {n_old} betroffen, "
+            f"ca. {0.2 * n_old:.0f} USD)", value=False, disabled=not n_old,
+            help="Die kritischen Würdigungen selbst werden nicht neu erstellt, nur Kürzung, Übersetzung und Stil.")
         go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen")
 
     if go2:
@@ -313,7 +319,7 @@ if any("recommended" in t for t in proj["topics"].values()):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
-                                                         "trial": opt_trial})
+                                                         "trial": opt_trial, "reshorten": opt_reshorten})
 
             run_with_status("Manuskript wird erstellt", step2, llm)
 
