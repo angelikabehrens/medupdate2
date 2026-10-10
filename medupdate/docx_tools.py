@@ -170,6 +170,24 @@ def add_floating_picture(paragraph, image_stream, width_emu: int) -> None:
     drawing.append(anchor)
 
 
+def _source_toc_entries(source_doc: Document) -> list[tuple[str, str]]:
+    """Liest das Inhaltsverzeichnis der Titelseite des Rohmanuskripts: [(Nummer, Titel)]."""
+    paras = [p.text.strip() for p in source_doc.paragraphs]
+    try:
+        start = next(i for i, t in enumerate(paras) if t in ("Inhaltsverzeichnis", "Contents"))
+    except StopIteration:
+        return []
+    out = []
+    for t in paras[start + 1:]:
+        m = re.match(r"^(\d+(?:\.\d+)*)\t(.+)$", t)
+        if not m:
+            if out or t:
+                break
+            continue
+        out.append((m.group(1), m.group(2)))
+    return out
+
+
 def copy_document_content_into_template(
     source_doc: Document, template_bytes: bytes, search_terms: list[str] | None = None
 ) -> bytes:
@@ -237,6 +255,43 @@ def copy_document_content_into_template(
             if parent is not None:
                 parent.remove(el)
 
+    # 3b) Inhaltsverzeichnis auf Seite 1: aus dem Quelldokument (bereits auf die tatsächlich
+    # besprochenen Themen gekürzt und neu nummeriert). Ein Beispiel-Inhaltsverzeichnis der Vorlage
+    # (Absätze mit Toc-Formatvorlagen vor "Interessenkonflikte") wird dabei ersetzt.
+    toc_entries = _source_toc_entries(source_doc)
+    if toc_entries:
+        toc1 = "Toc1" if "Toc1" in template_style_names else None
+        toc2 = "Toc2" if "Toc2" in template_style_names else toc1
+        anchor = None
+        for p in template_paragraphs[: ik_idx if ik_idx is not None else len(template_paragraphs)]:
+            if p._element.getparent() is None:
+                continue
+            if p.style.name.lower().startswith("toc") or p.text.strip().lower() in ("inhalt", "inhaltsverzeichnis"):
+                if anchor is None:
+                    anchor = template_doc.add_paragraph("")
+                    p._element.addprevious(anchor._element)
+                p._element.getparent().remove(p._element)
+        if anchor is None:
+            main = next((p for p in template_paragraphs if p.style.name == "MainTitle1"), None)
+            anchor = template_doc.add_paragraph("")
+            if main is not None:
+                main._element.addnext(anchor._element)
+            elif ik_idx is not None:
+                template_paragraphs[ik_idx]._element.addprevious(anchor._element)
+        min_depth = min(num.count(".") for num, _ in toc_entries)
+        last = anchor._element
+        head = template_doc.add_paragraph()
+        head.add_run("Inhalt").bold = True
+        last.addnext(head._element)
+        last = head._element
+        for num, text in toc_entries:
+            level2 = num.count(".") > min_depth
+            tp = template_doc.add_paragraph(f"{num}\t{text}", style=toc2 if level2 else toc1)
+            if (toc2 if level2 else toc1) is None and level2:
+                tp.paragraph_format.left_indent = Pt(18)
+            last.addnext(tp._element)
+            last = tp._element
+
     # 4) Datum + Suchbegriffe VOR "Interessenkonflikte" einfügen (mit 2 Leerzeilen davor,
     # zur Abgrenzung vom Inhaltsverzeichnis)
     if ik_idx is not None:
@@ -264,11 +319,13 @@ def copy_document_content_into_template(
     # Interessenskonflikte) – die wird übersprungen, da die Vorlage das bereits hat.
     source_paragraphs = list(source_doc.paragraphs)
     theme_marker_re = re.compile(r"^(?:Themensuche|Thema):\s*„(.+)“$")
+    section_marker_re = re.compile(r"^Abschnitt:\s*„(.+)“$")
     first_heading2_idx = next(
         (i for i, p in enumerate(source_paragraphs) if p.style.name == "Heading 2"), 0
     )
     first_marker_idx = next(
-        (i for i, p in enumerate(source_paragraphs) if theme_marker_re.match(p.text.strip())), None
+        (i for i, p in enumerate(source_paragraphs)
+         if theme_marker_re.match(p.text.strip()) or section_marker_re.match(p.text.strip())), None
     )
     start_idx = first_marker_idx if first_marker_idx is not None else first_heading2_idx
 
@@ -307,7 +364,25 @@ def copy_document_content_into_template(
             i += 1
             continue
 
+        section_match = section_marker_re.match(text_stripped)
+        if section_match:
+            # Hauptabschnitt ("8.1<TAB>Titel") als Toc1
+            sp = template_doc.add_paragraph(section_match.group(1), style=toc1_style)
+            if toc1_style is None:
+                for run in sp.runs:
+                    run.bold = True
+            i += 1
+            continue
+
         theme_match = theme_marker_re.match(text_stripped)
+        if theme_match and re.match(r"^\d+(?:\.\d+)*\t", theme_match.group(1)):
+            # Thema mit fertiger Nummer aus der Gliederung ("8.1.2<TAB>Titel") als Toc2
+            tp = template_doc.add_paragraph(theme_match.group(1), style=toc2_style)
+            if toc2_style is None:
+                for run in tp.runs:
+                    run.bold = True
+            i += 1
+            continue
         if theme_match:
             # Themensuche-Markierung: als Toc1 ("8.N") + Toc2 ("8.N.1  Themensuche: ...")
             # gegliedert, statt einzelne Publikationen zu nummerieren.

@@ -528,13 +528,14 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     title = (proj["toc"] or {}).get("chapter_title") or "Gesamtmanuskript"
     template = (proj.get("template") or {}).get("bytes")
     formatter = make_formatter(llm, rules, proj["records"], email)
+    gliederung = outline(proj, topic_ids)
     for lang in ("Deutsch", "Englisch"):
         blocks = []
         for tid in topic_ids:
             t = proj["topics"][tid]
             sota_block = (t.get("sota_de" if lang == "Deutsch" else "sota_en")
                           if tid in sota_ids and options.get("sota", True) else None)
-            block = {"topic": t["title"], "sota": sota_block, "pubs": []}
+            block = {"topic": t["title"], "sota": sota_block, "pubs": [], **gliederung.get(tid, {})}
             for p, tt in ready:
                 if tt != tid:
                     continue
@@ -632,6 +633,32 @@ def export_project(proj: dict) -> bytes:
     slim = dict(proj)
     slim["pubs"] = {p: {k: v for k, v in d.items() if k not in ("pdf", "images")} for p, d in proj["pubs"].items()}
     return gzip.compress(json.dumps(slim, default=_enc, ensure_ascii=False).encode("utf-8"), 6)
+
+
+def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
+    """Gliederung nach dem hochgeladenen Inhaltsverzeichnis, aber nur mit Themen, zu denen Publikationen
+    im Manuskript stehen; Hauptabschnitte und Themen werden dabei fortlaufend neu nummeriert.
+    Rückgabe je Thema: {"number": "8.1.2" | None, "section": ("8.1", Titel) | None}. Ein Hauptabschnitt mit
+    nur einem gleichnamigen Thema erscheint nur einmal (als Hauptabschnitt)."""
+    chapter = str((proj.get("toc") or {}).get("chapter_number") or "").strip().rstrip(".")
+    prefix = f"{chapter}." if chapter else ""
+    sections: dict[str, list[str]] = {}
+    titles: dict[str, str] = {}
+    for tid in proj["topics"]:  # Reihenfolge des Inhaltsverzeichnisses
+        if tid not in topic_ids:
+            continue
+        t = proj["topics"][tid]
+        key = t.get("section_number") or t.get("section_title") or tid
+        sections.setdefault(key, []).append(tid)
+        titles.setdefault(key, t.get("section_title") or t["title"])
+    out = {}
+    for s_idx, (key, tids) in enumerate(sections.items(), start=1):
+        sec_num = f"{prefix}{s_idx}"
+        merged = len(tids) == 1 and titles[key].strip().lower() == proj["topics"][tids[0]]["title"].strip().lower()
+        for t_idx, tid in enumerate(tids, start=1):
+            out[tid] = {"section": (sec_num, titles[key]) if t_idx == 1 else None,
+                        "number": None if merged else f"{sec_num}.{t_idx}"}
+    return out
 
 
 def partial_docx(proj: dict) -> bytes | None:

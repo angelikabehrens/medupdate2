@@ -81,7 +81,11 @@ class FakeLLM:
                     "topics": [{"number": "8.1.1", "title": "Thema Eins", "english_search_focus": "topic one",
                                 "section_number": "8.1", "section_title": "Abschnitt"},
                                {"number": "8.1.2", "title": "Thema Zwei", "english_search_focus": "topic two",
-                                "section_number": "8.1", "section_title": "Abschnitt"}]}
+                                "section_number": "8.1", "section_title": "Abschnitt"},
+                               {"number": "8.2.1", "title": "Thema Drei", "english_search_focus": "topic three",
+                                "section_number": "8.2", "section_title": "Leerer Abschnitt"},
+                               {"number": "8.3.1", "title": "Thema Vier", "english_search_focus": "topic four",
+                                "section_number": "8.3", "section_title": "Dritter Abschnitt"}]}
         if "citation_style" in props:
             return {k: (0 if v.get("type") == "integer" else ([] if v.get("type") == "array" else ""))
                     for k, v in props.items()} | {"max_pages": 20, "citation_style": "Vancouver", "recency_months": 12}
@@ -169,6 +173,7 @@ def test_full_pipeline(monkeypatch=None):
     assert proj["topics"]["T1"]["guidelines"][0]["text"]
     pipeline.recommendation_docx(proj)
 
+    proj["topics"]["T3"]["enabled"] = False  # ohne Publikationen: muss aus der Gliederung verschwinden
     first = proj["topics"]["T1"]["recommended"][0]
     rec = proj["records"][first]
     uploads = {"a.pdf": _pdf_with_image(f"{rec['title']} Smith J et al. " + "body text " * 500)}
@@ -192,9 +197,18 @@ def test_full_pipeline(monkeypatch=None):
     assert any("Smith J, Doe A, Roe B et al" in b for b in biblio)
     assert not any("Unused X" in b for b in biblio), "nicht zitierte Quelle darf nicht erscheinen"
     raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
-    assert raw.count("State of the Art") == 1, "nur ein State of the Art je Hauptabschnitt"
-    i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „Thema Zwei“")
+    assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
+    i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")
     assert i_sota == i_t2 + 1, "State of the Art vor dem Thema mit den meisten Publikationen"
+    toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
+    print("GLIEDERUNG", toc)
+    expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),
+                ("Toc1", "8.2\tDritter Abschnitt"), ("Toc2", "8.2.1\tThema Vier")]
+    assert toc[:5] == expected, "Inhaltsverzeichnis auf Seite 1, leerer Abschnitt entfernt und neu nummeriert"
+    assert toc[5:] == expected, "gleiche Nummern als Überschriften im Text"
+    assert not any("Leerer Abschnitt" in t or "Thema Drei" in t for _, t in toc)
+    texts = [p.text for p in doc.paragraphs]
+    assert texts.index("Inhalt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
     n_img = sum(1 for p in doc.paragraphs if p.text.startswith("Abb."))
     assert n_img >= 1, "Abbildung erwartet"
     print("BEFUNDE")
