@@ -477,10 +477,13 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         else:
             proj["pubs"][p].update(res)
 
-    # 6. State of the Art: einer je Hauptabschnitt, vor dem Thema mit den meisten Publikationen
+    # 6. State of the Art: einer je Hauptabschnitt, vor dem Thema mit der hochwertigsten Publikation
+    # (bei Gleichstand: mit den meisten Publikationen)
     topic_ids = [t for t in proj["topics"] if any(tt == t for _, tt in ready)]
     counts = {t: sum(1 for _, tt in ready if tt == t) for t in topic_ids}
-    sota_ids = A.sota_topics(topic_ids, proj["topics"], counts)
+    best_q = {t: max((recommend.quality(proj["topics"][t].get("ranking", {}).get(p, {})) for p, tt in ready if tt == t),
+                     default=0.0) for t in topic_ids}
+    sota_ids = A.sota_topics(topic_ids, proj["topics"], counts, best_q)
     proj["sota_topics"] = sota_ids
 
     def first_pub(tid):

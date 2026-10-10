@@ -286,14 +286,18 @@ def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str
     return tiers, overflow
 
 
-def sota_topics(topic_order: list[str], topics: dict[str, dict], pub_count: dict[str, int]) -> list[str]:
-    """Je Hauptabschnitt genau ein State of the Art, und zwar vor dem Thema mit den meisten
-    aufgenommenen Publikationen (bei Gleichstand das erste im Inhaltsverzeichnis)."""
+def sota_topics(topic_order: list[str], topics: dict[str, dict], pub_count: dict[str, int],
+                best_quality: dict[str, float] | None = None) -> list[str]:
+    """Je Hauptabschnitt genau ein State of the Art, und zwar vor dem Thema mit der hochwertigsten
+    aufgenommenen Publikation; bei Gleichstand vor dem Thema mit den meisten Publikationen, danach das
+    erste im Inhaltsverzeichnis."""
+    best_quality = best_quality or {}
     best: dict[str, str] = {}
     for tid in topic_order:
         if not pub_count.get(tid):
             continue
         sec = topics[tid].get("section_number") or topics[tid].get("section_title") or tid
-        if sec not in best or pub_count[tid] > pub_count[best[sec]]:
+        key = (best_quality.get(tid, 0.0), pub_count[tid])
+        if sec not in best or key > (best_quality.get(best[sec], 0.0), pub_count[best[sec]]):
             best[sec] = tid
     return [t for t in topic_order if t in best.values()]

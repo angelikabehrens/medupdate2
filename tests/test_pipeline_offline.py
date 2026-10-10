@@ -408,6 +408,15 @@ def test_sota_trailing_note():
     assert entries == {1: "Pimentel-Nunes P. ESGE. Endoscopy. 2022.", 2: "Ishihara R. Guidelines. Dig Endosc. 2020."}, entries
 
 
+def test_sota_choice():
+    from medupdate.appraisal import sota_topics
+    topics = {t: {"section_number": "8.1"} for t in ("A", "B", "C")} | {"D": {"section_number": "8.2"}}
+    counts = {"A": 3, "B": 1, "C": 2, "D": 1}
+    assert sota_topics(["A", "B", "C", "D"], topics, counts, {"A": 60, "B": 80, "C": 70, "D": 50}) == ["B", "D"]
+    assert sota_topics(["A", "B", "C", "D"], topics, counts, {"A": 80, "B": 80, "C": 80}) == ["A", "D"]
+    assert sota_topics(["A", "B", "C", "D"], topics, counts, {"A": 70, "B": 80, "C": 80}) == ["C", "D"]
+
+
 def test_split_intro():
     from medupdate.appraisal import split_intro
     ft = ("Title\nAbstract\nShort.\nIntroduction\nVarices bleed often [1]. Therapy is standard [2].\n"
@@ -443,6 +452,7 @@ if __name__ == "__main__":
     test_outline_levels()
     test_repeated_citations()
     test_split_intro()
+    test_sota_choice()
     test_sota_trailing_note()
     test_full_pipeline()
     print("OK")
