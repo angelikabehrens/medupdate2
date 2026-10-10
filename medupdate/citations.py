@@ -643,3 +643,54 @@ def dedupe_global_references(doc: Document) -> int:
     for c, new in sorted(order.items(), key=lambda kv: kv[1]):
         doc.add_paragraph(f"{new}. {entries[c]}")
     return removed
+
+
+def merge_repeated_citations(doc: Document) -> int:
+    """Neu in medupdate 2: Wird dieselbe Literaturstelle in einem Absatz mehrfach zitiert, steht der
+    Verweis nur einmal, am Ende des letzten Satzes des Absatzes. In späteren Absätzen wird sie wieder
+    genannt. Gibt die Zahl der entfernten Wiederholungen zurück."""
+    paragraphs = list(doc.paragraphs)
+    lit_idx = next((i for i, p in enumerate(paragraphs) if p.style.name == "Heading 1"
+                    and _LIT_HEADING_RE.match(p.text.strip())), len(paragraphs))
+    removed = 0
+    for p in paragraphs[:lit_idx]:
+        if p.style.name.startswith("Heading") or _ABSTRACT_LABEL_RE.match(p.text.strip()):
+            continue
+        counts: dict[int, int] = {}
+        for m in _CITE_RE.finditer(p.text):
+            nums = _split_cite_numbers(m.group(1))
+            if all(1900 <= x <= 2100 for x in nums):
+                continue
+            for x in dict.fromkeys(nums):
+                counts[x] = counts.get(x, 0) + 1
+        repeated = [x for x, c in counts.items() if c > 1]
+        if not repeated:
+            continue
+        removed += sum(counts[x] - 1 for x in repeated)
+
+        def _drop(m: re.Match) -> str:
+            nums = _split_cite_numbers(m.group(1))
+            if all(1900 <= x <= 2100 for x in nums):
+                return m.group(0)
+            rest = [x for x in nums if x not in repeated]
+            return f"({','.join(str(x) for x in rest)})" if rest else ""
+
+        for run in p.runs:
+            if run.text and _CITE_RE.search(run.text):
+                run.text = re.sub(r"[ \t]+([.,;:!?])", r"\1", _CITE_RE.sub(_drop, run.text))
+                run.text = re.sub(r"[ \t]{2,}", " ", run.text)
+        last = next((r for r in reversed(p.runs) if r.text.strip()), None)
+        if last is None:
+            continue
+        text = last.text.rstrip()
+        tail = last.text[len(text):]
+        end = re.search(r"([.!?][\"“”»«')]*)$", text)
+        body, punct = (text[: end.start()], end.group(1)) if end else (text, "")
+        prev = re.search(r"\s*[(\[](\d+(?:\s*,\s*\d+)*)[)\]]$", body)
+        if prev:
+            nums = list(dict.fromkeys(_split_cite_numbers(prev.group(1)) + repeated))
+            body = body[: prev.start()]
+        else:
+            nums = repeated
+        last.text = f"{body.rstrip()} ({','.join(str(x) for x in sorted(nums))}){punct}{tail}"
+    return removed

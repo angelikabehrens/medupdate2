@@ -9,7 +9,7 @@ from datetime import date
 
 from docx import Document
 
-from .citations import _CITE_RE, consolidate_literature_globally, dedupe_global_references
+from .citations import _CITE_RE, consolidate_literature_globally, dedupe_global_references, merge_repeated_citations
 from .config import MODEL_FAST
 from .docx_tools import copy_document_content_into_template
 
@@ -208,6 +208,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     doc = Document(io.BytesIO(docx_bytes))
     consolidate_literature_globally(doc)
     dedupe_global_references(doc)
+    merge_repeated_citations(doc)
     if format_references:
         # Neu in medupdate 2: Literaturverzeichnis nach dem Zitierstil der Hinweise für Autoren
         _paras = list(doc.paragraphs)

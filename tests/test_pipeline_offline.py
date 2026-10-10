@@ -385,11 +385,30 @@ def test_outline_levels():
     assert toc[8:] == expected, toc
 
 
+def test_repeated_citations():
+    from medupdate.citations import merge_repeated_citations
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("Kommentar: ").bold = True
+    p.add_run("Die Studie zeigt A (1). Im Jahr (2024) fand sich B (1,2). Der Effekt hielt an (1).")
+    d.add_paragraph("Ergänzend gilt C (3). Die Daten stützen D (1).")
+    d.add_paragraph("Studie: (1) Suche, (1) erneut")
+    assert merge_repeated_citations(d) == 2
+    assert d.paragraphs[0].text == "Kommentar: Die Studie zeigt A. Im Jahr (2024) fand sich B (2). Der Effekt hielt an (1).", \
+        d.paragraphs[0].text
+    assert d.paragraphs[1].text == "Ergänzend gilt C (3). Die Daten stützen D (1).", "neuer Absatz: wieder nennen"
+    d2 = Document()
+    d2.add_paragraph("A (1). B (1). C (4)")
+    merge_repeated_citations(d2)
+    assert d2.paragraphs[0].text == "A. B. C (1,4)", d2.paragraphs[0].text
+
+
 if __name__ == "__main__":
     test_llm_retry_and_cost()
     test_results_saved_before_abort()
     test_search_broadening()
     test_length_budget()
     test_outline_levels()
+    test_repeated_citations()
     test_full_pipeline()
     print("OK")
