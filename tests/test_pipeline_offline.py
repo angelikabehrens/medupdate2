@@ -185,7 +185,10 @@ def test_full_pipeline(monkeypatch=None):
         f"{proj['records'][second]['title']} Smith J et al. " + "intro text " * 500)}, log)
     assert proj["uploads"]["a.pdf"]["pmid"] == first
     proj["style"]["alt.docx"] = "Früheres Manuskript. " * 300
-    pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "trial": True})
+    pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "trial": True,
+                                             "trial_topic": "T2"})
+    assert all(p in proj["topics"]["T2"]["recommended"] for p, d in proj["pubs"].items()
+               if d.get("appraisal_en")), "Probelauf zum gewählten Thema"
     done = [p for p, d in proj["pubs"].items() if d.get("appraisal_en")]
     assert len(done) == 2, "Probelauf: höchstens 2 Publikationen"
     assert pipeline.partial_docx(proj)

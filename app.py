@@ -292,6 +292,11 @@ if any("recommended" in t for t in proj["topics"].values()):
         b1, b2 = st.columns(2)
         opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
                                 "vollständigen Lauf)", value=not out_any(proj))
+        trial_topics = list(dict.fromkeys(t for _, t in pipeline._pub_list(proj)))
+        opt_trial_topic = b1.selectbox(
+            "Thema für den Probelauf", trial_topics,
+            format_func=lambda t: proj["topics"][t].get("number", "") + " " + proj["topics"][t]["title"],
+        ) if trial_topics else None
         opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
                                      help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
                                           "ein erneuter Start setzt dort fort.")
@@ -319,7 +324,8 @@ if any("recommended" in t for t in proj["topics"].values()):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
-                                                         "trial": opt_trial, "reshorten": opt_reshorten})
+                                                         "trial": opt_trial, "trial_topic": opt_trial_topic,
+                                                         "reshorten": opt_reshorten})
 
             run_with_status("Manuskript wird erstellt", step2, llm)
 

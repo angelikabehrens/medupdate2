@@ -379,8 +379,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     pubs = _pub_list(proj)
     if options.get("trial"):
-        # Probelauf: erstes Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur einen Bruchteil
-        first = next((t for _, t in pubs), None)
+        # Probelauf: gewähltes (sonst erstes) Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur
+        # einen Bruchteil
+        wanted = options.get("trial_topic")
+        first = wanted if any(t == wanted for _, t in pubs) else next((t for _, t in pubs), None)
         pubs = [(p, t) for p, t in pubs if t == first][:2]
     log(f"{len(pubs)} Publikationen in {len({t for _, t in pubs})} Themen werden verarbeitet.")
 
