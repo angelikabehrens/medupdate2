@@ -908,3 +908,74 @@ höchstens 5), darunter die Überschrift „{sota_lit_label}“ mit der nummerie
 Erfinde keine Inhalte. Nach der Literaturliste folgt nichts mehr: keine Hinweise, Vorbehalte oder \
 Prüfbitten. Eine Aussage, die du nicht mit einer gefundenen Quelle belegen kannst, lässt du weg."""
     return prompt
+
+
+def joint_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
+    """Kürzung einer gemeinsamen Würdigung mehrerer Publikationen (aus MyLuo, Schritt 4B)."""
+    en = sprache_kw == "Englisch"
+    ziel_sprache = "englischer" if en else "deutscher"
+    fazit_label = "Joint Conclusion" if en else "Gemeinsames Fazit"
+    verknuepfung_label = "Assessment of the Linkage" if en else "Einordnung der Verknüpfung"
+    uebersicht_label = "Overview of the Publications" if en else "Übersicht der Publikationen"
+    wuerdigung_label = "Critical Appraisal" if en else "Kritische Würdigung"
+    if tier in ("Kurznachricht", "½ Seite (Kurz)"):
+        tier = "½ Seite (Kurz)"
+        aufbau = f"""Aufbau: NUR Fließtext, ein bis zwei Absätze. KEINE Zwischenüberschriften, \
+KEINE Labels wie "{uebersicht_label}:".
+
+Richtwerte für die Gewichtung:
+- Kurze Nennung der betrachteten Publikationen und ihres Studientyps: ca. 15%
+- Wie die Publikationen zueinander stehen (Kernaussage aus "{verknuepfung_label}"), inklusive was \
+NICHT zulässig ist (z.B. keine gemeinsame Effektschätzung): ca. 25%
+- Wichtigste kritische Punkte aus der "{wuerdigung_label}": ca. 35%
+- Letzter Satz (ohne Label): die Kernaussage des "{fazit_label}": ca. 25%"""
+    elif tier == "1 Seite":
+        aufbau = f"""Aufbau in drei Blöcken:
+1. "{uebersicht_label}" (ca. 25%): Für jede Publikation ein bis zwei knappe Sätze (Studiendesign, \
+Population, Hauptergebnis), eingeleitet mit "Publication 1:" bzw. "Publikation 1:" usw., mit Nennung der \
+Evidenzstufe.
+2. Fließtext aus "{verknuepfung_label}" und "{wuerdigung_label}" zusammengefasst (ca. 60%), OHNE \
+Zwischenüberschriften, in 2-3 Absätzen: erst die Einordnung der Verknüpfung (zulässig/nicht \
+zulässig), dann die wichtigsten methodischen Stärken/Schwächen über die Publikationen hinweg.
+3. "{fazit_label}:" (ca. 15%): eigener Absatz, beginnt mit "{fazit_label}:". Gewichtet die \
+unterschiedliche Evidenzqualität der Einzelpublikationen ausdrücklich."""
+    else:
+        tier = "1,5 Seiten (Lang)"
+        aufbau = f"""Aufbau in vier Blöcken:
+1. "{uebersicht_label}" (ca. 25%): wie bei "1 Seite", mit Nennung der Evidenzstufe je Publikation.
+2. "{verknuepfung_label}" (ca. 25%): Fließtext, ob und wie die Verknüpfung zulässig ist, was \
+NICHT zulässig wäre.
+3. "{wuerdigung_label}" (ca. 35%): Fließtext, wichtigste methodische Stärken/Schwächen über die \
+Publikationen hinweg.
+4. "{fazit_label}:" (ca. 15%): eigener Absatz, beginnt mit "{fazit_label}:", gewichtet die \
+unterschiedliche Evidenzqualität weiterhin ausdrücklich."""
+    target_words = SKILL_LAENGEN_STUFEN[tier]
+    return f"""Du bist wissenschaftlicher Redakteur und kürzt eine bereits erstellte gemeinsame \
+kritische Würdigung mehrerer Publikationen zu einer Fragestellung, für eine ärztliche Fortbildung. \
+Schreibe auf {ziel_sprache} Sprache.
+
+Zielumfang: ca. {target_words} Wörter (Stufe „{tier}"). Zählbasis: alle Wörter vom ersten Textabsatz bis \
+einschließlich {fazit_label}, ohne Literaturliste.
+
+{aufbau}
+
+GESPERRTE INHALTE – NIEMALS VERÄNDERN: Zahlen, Effektgrößen, Konfidenzintervalle, p-Werte, \
+Zeitangaben, Studiendesign, Literaturangaben (auch Klammerverweise). Weglassen im Rahmen der \
+Priorisierung ist erlaubt, Verändern nie.
+
+Die Einordnung, OB und WIE die Verknüpfung der Publikationen zulässig ist, darf in keiner Stufe \
+komplett entfallen. Vermische nicht die unterschiedliche Evidenzqualität der Einzelpublikationen zu einer \
+einheitlich klingenden Gesamtaussage.
+
+Literaturverweise in Klammern (z.B. "(1)"), die du übernimmst, müssen weiterhin zu einem Eintrag in \
+der Literaturliste passen; entferne den Verweis, wenn du die einzige Stelle kürzt, die ihn benötigt.
+
+Stil: kurze, klare Sätze (möglichst höchstens 20–25 Wörter), eine Hauptaussage pro Satz, keine \
+Schachtelsätze. Sparsam mit Statistik: Hauptergebnisse mit Effektgröße und 95%-Konfidenzintervall, \
+Nebenergebnisse in Worten, höchstens zwei Zahlenangaben pro Satz. Wesentliche Inhalte bleiben erhalten. \
+Kein Telegrammstil, keine Aufzählungen im Fließtext.
+
+Ausgabe: Gib ausschließlich den fertigen Text aus, ohne Literaturliste, ohne Erläuterung des Vorgehens.
+
+Bereits erstellte gemeinsame kritische Würdigung:
+{full_text}"""

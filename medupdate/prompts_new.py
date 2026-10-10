@@ -211,7 +211,10 @@ Autorin in einem deutschsprachigen Fortbildungshandbuch schreibt.
 
 Labels am Absatzanfang exakt so übersetzen: "Study:" -> "Studie:", "Results:" -> "Ergebnisse:", \
 "Authors' Conclusion:" -> "Schlussfolgerung der Autoren:", "Comment:" -> "Kommentar:", \
-"Conclusion for Practice:" -> "Fazit für die Praxis:".
+"Conclusion for Practice:" -> "Fazit für die Praxis:", "Overview of the Publications" -> "Übersicht der \
+Publikationen", "Publication 1:" -> "Publikation 1:" (ebenso 2, 3), "Assessment of the Linkage" -> \
+"Einordnung der Verknüpfung", "Critical Appraisal" -> "Kritische Würdigung", "Joint Conclusion:" -> \
+"Gemeinsames Fazit:".
 
 Inhaltliche Treue hat Vorrang vor allem anderen: nichts hinzufügen, nichts weglassen; Zahlen, Effektgrößen, \
 Konfidenzintervalle und p-Werte unverändert (Dezimalpunkt wird zum deutschen Dezimalkomma, sonst keine \
@@ -380,3 +383,66 @@ Neue Publikationen:
 {ps}
 
 {ms}"""
+
+
+def group_prompt(topic: str, pubs: list[dict]) -> str:
+    ps = "\n".join(f"- id {p['id']} | {p['title']} | Fragestellung: {p['question']} | {p['summary']}" for p in pubs)
+    return f"""Du erhältst die Publikationen, die im Manuskript zum Thema „{topic}“ besprochen werden. Prüfe, \
+ob zwei oder drei davon nahezu dieselbe klinische Fragestellung bearbeiten, z.B. verschiedene \
+endoskopische Techniken zur Therapie derselben Indikation oder zwei Studien unterschiedlicher \
+Evidenzstufe zur selben Frage. Solche Publikationen werden im Manuskript gemeinsam gewürdigt statt \
+einzeln nacheinander.
+
+Regeln:
+- Eine Gruppe hat 2 oder 3 Publikationen; jede Publikation gehört höchstens zu einer Gruppe.
+- Nur bei wirklich nahezu gleicher Fragestellung (gleiche Population/Indikation und vergleichbare \
+Endpunkte). Dasselbe Thema allein reicht nicht. Im Zweifel keine Gruppe.
+- "question_de" / "question_en": die gemeinsame Fragestellung als kurzer Titel (höchstens ca. 12 Wörter).
+- Gibt es keine solche Gruppe, gib eine leere Liste zurück.
+
+Publikationen:
+{ps}"""
+
+
+def joint_appraisal_prompt(question: str, members: list[dict]) -> str:
+    blocks = "\n\n".join(
+        f"--- Publication {i} ---\nTitle: {m['title']}\nJournal: {m['journal']} ({m['year']})\n"
+        f"Study type: {m['pub_types']}\nExisting critical appraisal of this publication:\n{m['appraisal']}"
+        for i, m in enumerate(members, start=1))
+    return f"""You are an experienced clinical scientist writing for a German continuing medical education \
+handbook (med update) for specialists. Write in English. Create ONE joint, comparative critical appraisal of the \
+following {len(members)} publications on the shared clinical question: "{question}".
+
+Do NOT appraise the publications one after another. Relate them to each other. Work ONLY with the \
+existing appraisals below (they were written from the full texts). Do not invent data, methods, results or \
+sources; do not round or change numbers; keep the authors' conclusions with their hedging. Drugs only by \
+generic name. No Markdown.
+
+Use exactly these sections, each heading on its own line:
+
+Overview of the Publications
+One short block per publication, starting with "Publication 1:", "Publication 2:" etc.: design and \
+evidence level, population, intervention/comparison, main result with the key numbers.
+
+Assessment of the Linkage
+Can the publications be considered together, and how? Are populations comparable? Same or different \
+evidence level? May effect estimates be placed side by side or combined, or not? Do they complement or \
+contradict each other? End with a clear statement of what kind of linkage is valid and what is not \
+(e.g. no pooled effect estimate).
+
+Critical Appraisal
+Running text: methodological strengths and weaknesses across the publications, where they confirm, \
+qualify or differ from each other, and the relevance for clinical practice in the context of guidelines.
+
+Joint Conclusion
+2-4 sentences answering the shared question. Weigh the different evidence quality explicitly.
+
+References
+External sources cited in the text, taken unchanged from the reference lists of the existing appraisals, \
+numbered (1), (2), ... in order of first citation; cite them in the text as "(1)", "(2,3)". Do NOT give the \
+{len(members)} publications themselves a number; refer to them as "Publication 1" or by first author.
+
+Style: short, clear sentences (about 20-25 words at most), one main point per sentence, sparing \
+statistics (main results with effect size and 95% CI).
+
+{blocks}"""

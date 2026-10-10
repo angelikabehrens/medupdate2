@@ -155,9 +155,18 @@ def _enabled_topics(proj: dict) -> list[str]:
     return [tid for tid, t in proj["topics"].items() if t.get("enabled", True)]
 
 
+def _rank_item(proj: dict, p: str, t: str) -> dict:
+    """Bewertung aus Schritt 1; für eine gemeinsame Würdigung die beste der beteiligten Publikationen."""
+    rk = proj["topics"][t].get("ranking", {})
+    members = (proj["pubs"].get(p) or {}).get("group")
+    if members:
+        items = [rk.get(m, {}) for m in members]
+        return max(items, key=lambda it: it.get("length_score", 0), default={})
+    return rk.get(p, {})
+
+
 def _length_info(proj: dict, pairs: list[tuple[str, str]]) -> list[dict]:
-    return [{"id": p, "length_score": proj["topics"][t].get("ranking", {}).get(p, {}).get("length_score", 50)}
-            for p, t in pairs]
+    return [{"id": p, "length_score": _rank_item(proj, p, t).get("length_score", 50)} for p, t in pairs]
 
 
 def _n_sections(proj: dict, topic_ids) -> int:
@@ -428,6 +437,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             main = pubmed.format_reference(proj["records"].get(p, {}))
             body, lit = dedupe_local_literature(body, [main] + entries)
             d["body_en"], d["literature"] = strip_appraisal_preamble(body), lit
+    # 3b. Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (wie MyLuo, Schritt 4B)
+    if options.get("joint", True):
+        ready = apply_groups(llm, proj, ready, log)
+
     if not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready):
         # Selbst ausgewählte Arbeiten werden nicht verworfen: im Notfall alle auf ½ Seite, Hinweis im Protokoll
         tiers, overflow = A.plan_tiers(_length_info(proj, ready), proj.get("rules") or {},
@@ -450,6 +463,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
 
     def shorten(p):
         d, rec = proj["pubs"][p], proj["records"].get(p, {})
+        if d.get("group"):
+            return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch")
         return A.shorten(llm, d["body_en"], proj["tiers"][p], "Englisch", rec.get("abstract", ""))
 
     log("Würdigungen werden auf die geplanten Längen gekürzt…")
@@ -480,15 +495,22 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     # 6. State of the Art: einer je Hauptabschnitt, vor dem Thema mit der hochwertigsten Publikation
     # (bei Gleichstand: mit den meisten Publikationen)
     topic_ids = [t for t in proj["topics"] if any(tt == t for _, tt in ready)]
-    counts = {t: sum(1 for _, tt in ready if tt == t) for t in topic_ids}
-    best_q = {t: max((recommend.quality(proj["topics"][t].get("ranking", {}).get(p, {})) for p, tt in ready if tt == t),
+    counts = {t: sum(len(proj["pubs"][p].get("group") or [p]) for p, tt in ready if tt == t) for t in topic_ids}
+    best_q = {t: max((recommend.quality(_rank_item(proj, p, t)) for p, tt in ready if tt == t),
                      default=0.0) for t in topic_ids}
     sota_ids = A.sota_topics(topic_ids, proj["topics"], counts, best_q)
     proj["sota_topics"] = sota_ids
 
     def first_pub(tid):
-        """Die erste Publikation des Themas mit Volltext (sie folgt direkt auf den State of the Art)."""
-        return next((p for p, tt in ready if tt == tid and proj["pubs"][p].get("full_text")), None)
+        """Die erste Publikation des Themas mit Volltext (sie folgt direkt auf den State of the Art);
+        bei einer gemeinsamen Würdigung die erste beteiligte Publikation mit Volltext."""
+        for p, tt in ready:
+            if tt != tid:
+                continue
+            for m in proj["pubs"][p].get("group") or [p]:
+                if proj["pubs"].get(m, {}).get("full_text"):
+                    return m
+        return None
 
     # Neu erstellen, wenn noch keiner da ist oder ein älterer (per Websuche) durch einen aus der
     # Einleitung der folgenden Publikation ersetzt werden kann
@@ -591,11 +613,15 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                 own = (proj.get("own_refs") or {}).get(p) if options.get("own_refs", True) else None
                 if own:
                     text = insert_own_ref(text, own["de" if lang == "Deutsch" else "en"])
-                text, lit = reconcile_local_citations(text, d["literature"])
+                members = d.get("group") or []
+                text, lit = reconcile_local_citations(text, d["literature"], protected_count=max(1, len(members)))
+                if members:
+                    rec = dict(rec, title=d["title_de" if lang == "Deutsch" else "title_en"])
                 fig = d.get("figure")
                 figure = ({"bytes": fig["bytes"], "typ": fig["typ"],
                            "caption": fig["caption_de" if lang == "Deutsch" else "caption_en"]} if fig else None)
                 block["pubs"].append({"title": rec.get("title", p), "rec": rec, "abstract": abstract,
+                                      "recs": [proj["records"].get(m, {}) for m in members],
                                       "lines": [l for l in text.split("\n") if l.strip()], "literature": lit,
                                       "figure": figure})
             blocks.append(block)
@@ -730,6 +756,95 @@ def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
                 out[tid] = {"section": sec if t_idx == 1 else None,
                             "subsection": (num, st) if t_idx == 1 else None,
                             "number": f"{num}.{t_idx}", "level": 3}
+    return out
+
+
+GROUP_SCHEMA = obj({"groups": arr(obj({"pub_ids": arr(STR), "question_de": STR, "question_en": STR}))})
+
+
+def find_groups(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[dict]:
+    """Publikationen eines Themas mit nahezu gleicher Fragestellung (je Gruppe 2–3)."""
+    rk = proj["topics"][tid].get("ranking", {})
+    pubs = [{"id": p, "title": proj["records"].get(p, {}).get("title", p),
+             "question": rk.get(p, {}).get("question_key", ""),
+             "summary": " ".join((proj["records"].get(p, {}).get("abstract") or "").split())[:500]} for p in pmids]
+    res = llm.json(P.group_prompt(proj["topics"][tid]["title"], pubs), GROUP_SCHEMA, model=MODEL_MAIN,
+                   max_tokens=3000, effort="medium")
+    out, used = [], set()
+    for g in res.get("groups", []):
+        ids = [p for p in dict.fromkeys(g.get("pub_ids", [])) if p in pmids and p not in used]
+        if 2 <= len(ids) <= 3:
+            used.update(ids)
+            out.append({"pmids": ids, "question_de": g.get("question_de", "").strip(),
+                        "question_en": g.get("question_en", "").strip()})
+    return out
+
+
+def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> list[tuple[str, str]]:
+    """Ersetzt Publikationen mit nahezu gleicher Fragestellung durch EINE gemeinsame Würdigung
+    (Eintrag "G-…" in proj["pubs"], gebildet aus den Einzelwürdigungen). Gibt die neue Liste zurück."""
+    singles = [(p, t) for p, t in ready if not proj["pubs"][p].get("group")]
+    by_topic: dict[str, list[str]] = {}
+    for p, t in singles:
+        by_topic.setdefault(t, []).append(p)
+    for tid, pmids in by_topic.items():
+        t = proj["topics"][tid]
+        if len(pmids) < 2:
+            continue
+        key = sorted(pmids)
+        if t.get("groups_for") != key:
+            log(f"Gemeinsame Fragestellungen in „{t['title']}“ werden geprüft…")
+            try:
+                t["groups"], t["groups_for"] = find_groups(llm, proj, tid, pmids), key
+            except AccountError:
+                raise
+            except Exception as ex:
+                _err(proj, f"Gruppierung {t['title']}", ex)
+    todo = []
+    for tid in by_topic:
+        for g in proj["topics"][tid].get("groups", []):
+            if not all(p in by_topic[tid] for p in g["pmids"]):
+                continue
+            gid = "G-" + "-".join(g["pmids"])
+            if not proj["pubs"].get(gid, {}).get("appraisal_en"):
+                todo.append((gid, (gid, tid, g)))
+
+    def joint(item):
+        gid, tid, g = item
+        members = []
+        for m in g["pmids"]:
+            rec, d = proj["records"].get(m, {}), proj["pubs"][m]
+            lit = "\n".join(f"{i}. {e}" for i, e in enumerate(d.get("literature", [])[1:], start=2))
+            members.append({"title": rec.get("title", m), "journal": rec.get("journal", ""), "year": rec.get("year", ""),
+                            "pub_types": ", ".join(rec.get("pub_types") or []),
+                            "appraisal": d["body_en"] + ("\n\nReferences\n" + lit if lit else "")})
+        return A.joint_appraisal(llm, g["question_en"] or proj["topics"][tid]["title"], members)
+
+    if todo:
+        log(f"Gemeinsame Würdigungen werden erstellt ({len(todo)})…")
+    for gid, res in _parallel(todo, joint, log, "Gemeinsame Würdigung").items():
+        if isinstance(res, Exception):
+            _err(proj, "Gemeinsame Würdigung", res)
+            continue
+        tid, g = next((tid, g) for tid in by_topic for g in proj["topics"][tid].get("groups", [])
+                      if "G-" + "-".join(g["pmids"]) == gid)
+        body, entries = extract_and_renumber_citations_global(res, len(g["pmids"]) + 1)
+        mains = [pubmed.format_reference(proj["records"].get(m, {})) for m in g["pmids"]]
+        proj["pubs"][gid] = {"group": g["pmids"], "topic_id": tid, "appraisal_en": res,
+                             "body_en": strip_appraisal_preamble(body), "literature": mains + entries,
+                             "title_de": f"Gemeinsame Würdigung: {g['question_de'] or g['question_en']}",
+                             "title_en": f"Joint appraisal: {g['question_en'] or g['question_de']}"}
+    # Reihenfolge: die gemeinsame Würdigung steht an der Stelle ihrer ersten Publikation
+    current = {"G-" + "-".join(g["pmids"]) for tid in by_topic for g in proj["topics"][tid].get("groups", [])
+               if all(p in by_topic[tid] for p in g["pmids"])}
+    member_of = {m: gid for gid in current if proj["pubs"].get(gid, {}).get("body_en")
+                 for m in proj["pubs"][gid]["group"]}
+    out, seen = [], set()
+    for p, t in ready:
+        gid = member_of.get(p, p)
+        if gid not in seen:
+            seen.add(gid)
+            out.append((gid, t))
     return out
 
 

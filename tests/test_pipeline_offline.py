@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fitz
 from docx import Document
 
-from medupdate import docx_tools, guidelines, manuscript, pipeline, pubmed, references
+from medupdate import docx_tools, guidelines, manuscript, pipeline, pubmed, recommend, references
 
 APPRAISAL = """1. Strengths of the Study
 Randomized design with 1,200 patients (2).
@@ -50,6 +50,14 @@ class FakeLLM:
         self.calls.append(("text", p[:80]))
         if "Leitlinien zum folgenden Thema" in p:
             return "1. S3-Leitlinie Testthema, DGXX, 2025, https://register.awmf.org/x.pdf"
+        if "ONE joint, comparative critical appraisal" in p:
+            return ("Overview of the Publications\nPublication 1: RCT A.\nPublication 2: RCT B.\n"
+                    "Assessment of the Linkage\nComparable populations, no pooled estimate.\n"
+                    "Critical Appraisal\nBoth trials are consistent with the guideline (1).\n"
+                    "Joint Conclusion\nBoth techniques are effective.\nReferences\n1. Joint Guideline X. Gut. 2025;1:1.")
+        if "kürzt eine bereits erstellte gemeinsame" in p:
+            return ("Publication 1: RCT A. Publication 2: RCT B. No pooled estimate. Consistent with the "
+                    "guideline (1).\nJoint Conclusion: Both techniques are effective.")
         if "Du bist ein erfahrener klinisch-wissenschaftlicher Experte" in p:
             return APPRAISAL
         if "kürzt eine bereits erstellte kritische" in p:
@@ -78,8 +86,14 @@ class FakeLLM:
     def json(self, prompt, schema, **kw):
         p = prompt if isinstance(prompt, str) else json.dumps(prompt, default=str)
         props = schema["properties"]
+        if "groups" in props and "pub_ids" in json.dumps(schema):
+            ids = re.findall(r"- id (\d+)", p)
+            if "Thema Zwei" in p and len(ids) >= 2:
+                return {"groups": [{"pub_ids": ids[:2], "question_de": "Zwei Techniken im Vergleich",
+                                    "question_en": "Two techniques compared"}]}
+            return {"groups": []}
         if "refs" in props:
-            pid = re.search(r"- id (\d+)", p).group(1)
+            pid = re.search(r"- id (\S+)", p).group(1)
             return {"refs": [{"pub_id": pid, "manuscript": "alt.docx",
                               "sentence_de": "Im Jahr 2025 hatten wir dazu eine Vorstudie vorgestellt.",
                               "sentence_en": "In 2025 we presented a pilot study on this."}]}
@@ -157,6 +171,7 @@ def _template() -> bytes:
 
 
 def test_full_pipeline(monkeypatch=None):
+    recommend.MAX_PER_QUESTION = 1  # feste Auswahl für die Zählungen unten; Gruppierung siehe Schritt 2
     counter = iter(range(10000000, 10001000))
     pubmed.search = lambda q, n, email="": ([str(next(counter)) for _ in range(6)], 6)
     pubmed.fetch_records = lambda ids, email="": {i: _rec(i) for i in ids}
@@ -193,8 +208,8 @@ def test_full_pipeline(monkeypatch=None):
     pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True, "trial": True,
                                              "trial_topic": "T2"})
     assert all(p in proj["topics"]["T2"]["recommended"] for p, d in proj["pubs"].items()
-               if d.get("appraisal_en")), "Probelauf zum gewählten Thema"
-    done = [p for p, d in proj["pubs"].items() if d.get("appraisal_en")]
+               if d.get("appraisal_en") and not d.get("group")), "Probelauf zum gewählten Thema"
+    done = [p for p, d in proj["pubs"].items() if d.get("appraisal_en") and not d.get("group")]
     assert len(done) == 2, "Probelauf: höchstens 2 Publikationen"
     assert pipeline.partial_docx(proj)
     pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True})
@@ -204,12 +219,17 @@ def test_full_pipeline(monkeypatch=None):
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "Fazit für die Praxis" in text and "Studie:" in text
     assert text.count("Im Jahr 2025 hatten wir dazu eine Vorstudie vorgestellt.") == 1, "Rückbezug auf früheres Manuskript"
+    assert "Gemeinsame Würdigung: Zwei Techniken im Vergleich" in text, "gemeinsame Würdigung"
     assert "Biblio" in {p.style.name for p in doc.paragraphs}
     biblio = [p.text for p in doc.paragraphs if p.style.name == "Biblio"]
     # 6 Publikationen + je Thema 2 SotA-Quellen + Meta-Analyse + Leitlinie
     print("\n".join(biblio))
     assert any("Smith J, Doe A, Roe B et al" in b for b in biblio)
     assert not any("Unused X" in b for b in biblio), "nicht zitierte Quelle darf nicht erscheinen"
+    assert any("Joint Guideline X" in b for b in biblio), "externe Quelle der gemeinsamen Würdigung"
+    gid = next(p for p, d in proj["pubs"].items() if d.get("group"))
+    for m in proj["pubs"][gid]["group"]:
+        assert any(proj["records"][m]["doi"] in b for b in biblio), "beide Publikationen im Literaturverzeichnis"
     raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
     assert proj["topics"]["T2"]["sota_en"]["source"] == "intro", "State of the Art aus der Einleitung"
     assert proj["topics"]["T4"]["sota_en"]["source"] == "web", "ohne Volltext: wie bisher per Websuche"

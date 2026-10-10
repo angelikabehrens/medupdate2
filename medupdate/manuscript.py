@@ -100,7 +100,10 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
 
         for pub in b["pubs"]:
             doc.add_heading(pub["title"], level=2)
-            doc.add_paragraph(short_citation(pub["rec"], [1]))
+            if pub.get("recs"):  # gemeinsame Würdigung: alle Publikationen in der Zitierzeile
+                doc.add_paragraph("; ".join(short_citation(r, [i]) for i, r in enumerate(pub["recs"], start=1)))
+            else:
+                doc.add_paragraph(short_citation(pub["rec"], [1]))
             if pub.get("abstract"):
                 doc.add_paragraph(pub["abstract"])
             for line in pub["lines"]:

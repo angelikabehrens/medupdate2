@@ -115,6 +115,23 @@ def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text:
     return renumber_and_prune_citations(text)
 
 
+def shorten_joint(llm: LLM, full_text: str, tier: str, sprache_kw: str) -> str:
+    text = llm.text(M.joint_shorten_prompt(full_text, tier, sprache_kw), model=MODEL_MAIN, max_tokens=8000,
+                    effort="medium")
+    if not text:
+        raise ValueError("Die KI hat für die Kürzung keine (leere) Antwort geliefert.")
+    return renumber_and_prune_citations(text)
+
+
+def joint_appraisal(llm: LLM, question: str, members: list[dict]) -> str:
+    """Gemeinsame Würdigung aus den vorhandenen Einzelwürdigungen (ohne Websuche)."""
+    text = llm.text(P.joint_appraisal_prompt(question, members), model=MODEL_MAIN, max_tokens=12000,
+                    effort="high")
+    if not text:
+        raise ValueError("Die KI hat für die gemeinsame Würdigung keine (leere) Antwort geliefert.")
+    return text
+
+
 def translate_structured(llm: LLM, text: str) -> str:
     return llm.text(P.translate_structured_prompt(text), model=MODEL_FAST, max_tokens=8000, effort="low")
 

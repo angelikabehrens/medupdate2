@@ -1,4 +1,4 @@
-"""medupdate 2 – nahezu automatisierte Erstellung eines wissenschaftlichen Fortbildungsmanuskripts.
+"""MyLuo Pro – nahezu automatisierte Erstellung eines wissenschaftlichen Fortbildungsmanuskripts.
 
 Zwei Schritte für die Nutzerin bzw. den Nutzer:
 1. Inhaltsverzeichnis, Formatvorlage und Hinweise für Autoren hochladen → KI-gestützte
@@ -19,11 +19,11 @@ from medupdate.config import secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
 
-st.set_page_config(page_title="medupdate 2", layout="wide")
+st.set_page_config(page_title="MyLuo Pro", layout="wide")
 st.markdown(
-    "<div style='font-size:3rem; font-weight:700; line-height:1.2;'>medupdate 2</div>"
-    "<div style='font-size:1.3rem; font-style:italic; margin-top:0.2rem;'>vom Inhaltsverzeichnis zum fertigen "
-    "Manuskript</div><div style='margin-top:2rem;'></div>",
+    "<div style='font-size:3rem; font-weight:700; line-height:1.2;'>MyLuo Pro</div>"
+    "<div style='font-size:1.3rem; font-style:italic; margin-top:0.2rem;'>Intelligent Scientific Workflow: "
+    "Beyond Summaries. Into Scientific Synthesis.</div><div style='margin-top:2rem;'></div>",
     unsafe_allow_html=True,
 )
 
@@ -78,7 +78,7 @@ with st.sidebar:
         st.session_state["proj"] = pipeline.new_project()
         st.rerun()
 
-with st.expander("👋 So funktioniert medupdate 2", expanded=not proj.get("toc")):
+with st.expander("👋 So funktioniert MyLuo Pro", expanded=not proj.get("toc")):
     st.markdown(
         "**Schritt 1:** E-Mail-Adresse eingeben, Inhaltsverzeichnis, Formatvorlage und Hinweise für Autoren "
         "hochladen. Die KI zerlegt das Inhaltsverzeichnis in Themen, sucht in PubMed die wichtigsten neuen "
@@ -289,6 +289,9 @@ if any("recommended" in t for t in proj["topics"].values()):
         opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
         opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
+        opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (2–3 je Gruppe)",
+                                value=True, help="Wie Schritt 4B in MyLuo. Die Einzelwürdigungen werden zu einer "
+                                                 "vergleichenden Würdigung zusammengeführt.")
         opt_own = st.checkbox("Inhaltliche Rückbezüge auf meine früheren Manuskripte (höchstens 2, nur wo sinnvoll)",
                               value=True, help="Nur wenn eigene Manuskripte hochgeladen sind. Ein zusätzlicher KI-Aufruf.")
         b1, b2 = st.columns(2)
@@ -326,7 +329,7 @@ if any("recommended" in t for t in proj["topics"].values()):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
-                                                         "trial": opt_trial, "trial_topic": opt_trial_topic, "own_refs": opt_own,
+                                                         "trial": opt_trial, "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
                                                          "reshorten": opt_reshorten})
 
             run_with_status("Manuskript wird erstellt", step2, llm)

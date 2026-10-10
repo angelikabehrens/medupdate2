@@ -298,11 +298,16 @@ def consolidate_literature_globally(doc: Document) -> list[str]:
                 skip.add(i)
         scan = [i for i in range(pos + 1, end) if i not in skip]
 
-        # Hauptquelle der Publikation erhält die nächste freie Nummer
-        g_main = counter
-        counter += 1
-        global_entries[g_main] = local_map[1]
-        mapping: dict[int, int] = {1: g_main}
+        # Hauptquelle der Publikation erhält die nächste freie Nummer. Eine gemeinsame Würdigung hat
+        # mehrere Hauptquellen; ihre Zitierzeile nennt sie alle ("A et al. … (1); B et al. … (2)").
+        mains = [n for m in _CITE_RE.finditer(cit_text) for n in _split_cite_numbers(m.group(1))]
+        mains = list(dict.fromkeys(n for n in mains if n in local_map)) if len(mains) > 1 else [1]
+        mapping: dict[int, int] = {}
+        for n in mains:
+            mapping[n] = counter
+            global_entries[counter] = local_map[n]
+            counter += 1
+        g_main = mapping[mains[0]]
 
         # 1. Durchgang: Reihenfolge des ersten Auftretens im Text bestimmen
         for i in scan:
@@ -337,7 +342,13 @@ def consolidate_literature_globally(doc: Document) -> list[str]:
                     run.text = new_text
 
         # Zitierzeile unter dem Titel: Verweis auf die Hauptquelle aktualisieren
-        if cit_idx is not None:
+        if cit_idx is not None and len(mains) > 1:
+            for run in paragraphs[cit_idx].runs:
+                if run.text and _CITE_RE.search(run.text):
+                    run.text = _CITE_RE.sub(
+                        lambda m: f"({','.join(str(mapping[n]) for n in _split_cite_numbers(m.group(1)) if n in mapping)})",
+                        run.text)
+        elif cit_idx is not None:
             cp = paragraphs[cit_idx]
             marker_re = re.compile(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]\s*$")
             replaced = False

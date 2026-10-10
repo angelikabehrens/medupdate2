@@ -1,4 +1,4 @@
-# medupdate 2 – automatisiertes wissenschaftliches Manuskript
+# MyLuo Pro – Intelligent Scientific Workflow: Beyond Summaries. Into Scientific Synthesis.
 
 Web-App (Python/Streamlit) als Nachfolger von MyLuo. Aus Inhaltsverzeichnis, Formatvorlage und
 Hinweisen für Autoren entsteht weitgehend automatisch ein Gesamtmanuskript (Deutsch und Englisch)
@@ -18,6 +18,7 @@ Die Auswahl lässt sich anpassen; die Empfehlungsliste gibt es als Word-Datei.
 **Schritt 2:** Originalpublikationen (PDF), eigene Manuskripte der letzten 3 Jahre und optional weitere
 Publikationen sowie fehlende Leitlinien hochladen. Danach automatisch: Volltexte (Upload oder Open
 Access), kritische Würdigung mit Kommentar und Fazit, Kürzung nach Qualität und Seitenlimit,
+gemeinsame Würdigung von 2–3 Publikationen mit nahezu gleicher Fragestellung (wie Schritt 4B in MyLuo),
 Übersetzung ins Deutsche, State of the Art (einer je Hauptabschnitt, vor dem Thema mit der hochwertigsten Publikation, bei
 Gleichstand mit den meisten Publikationen; 3–5 Kernaussagen aus der Einleitung der ersten folgenden Publikation, ohne Volltext per
 Websuche), Stilanpassung an die eigenen Manuskripte,

@@ -184,8 +184,11 @@ def length_score(item: dict) -> float:
                  + 0.1 * impact_score(item.get("journal_impact_factor")), 1)
 
 
+MAX_PER_QUESTION = 3
+
+
 def select(ranking: dict[str, dict], n_max: int, reserve: int = 3) -> tuple[list[str], list[str]]:
-    """Nur Priorität A; höchstens eine Arbeit pro Fragestellung und höchstens n_max je Thema.
+    """Nur Priorität A; höchstens 3 Arbeiten pro Fragestellung (gemeinsame Würdigung) und höchstens n_max je Thema.
     Reserve (nicht vorausgewählt): weitere A-Arbeiten über der Obergrenze, sonst die besten B-Arbeiten."""
     for pmid, item in ranking.items():
         item["score"] = score(item)
@@ -196,13 +199,15 @@ def select(ranking: dict[str, dict], n_max: int, reserve: int = 3) -> tuple[list
         (p for p, it in ranking.items() if it.get("relevance", 0) >= RELEVANCE_MIN),
         key=lambda p: (ranking[p]["length_score"], ranking[p]["score"]), reverse=True,
     )
-    chosen, backup, used_keys = [], [], set()
+    chosen, backup, per_key = [], [], {}
     for p in ordered:
         key = (ranking[p].get("question_key") or p).strip().lower()
-        if ranking[p]["priority"] == "A" and len(chosen) < n_max and key not in used_keys:
+        n_key = per_key.get(key, 0)
+        # Bis zu 3 Arbeiten zur selben Fragestellung: sie werden in Schritt 2 gemeinsam gewürdigt
+        if ranking[p]["priority"] == "A" and len(chosen) < n_max and n_key < MAX_PER_QUESTION:
             chosen.append(p)
-            used_keys.add(key)
-        elif ranking[p]["priority"] in ("A", "B") and len(backup) < reserve and key not in used_keys:
+            per_key[key] = n_key + 1
+        elif ranking[p]["priority"] in ("A", "B") and len(backup) < reserve and not n_key:
             backup.append(p)
     return chosen, backup
 
