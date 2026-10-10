@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -198,7 +199,7 @@ def test_full_pipeline(monkeypatch=None):
     blob = pipeline.export_project(proj)
     again = pipeline.import_project(blob)
     assert again["outputs"]["manuskript_DE"] == out["manuskript_DE"]
-    Path("/tmp/claude-0/-home-claude/e220893b-f592-5364-ac2c-a520ed8bbd4a/scratchpad/test_DE.docx").write_bytes(out["manuskript_DE"])
+    (Path(tempfile.gettempdir()) / "medupdate_test_DE.docx").write_bytes(out["manuskript_DE"])
 
 
 def test_length_budget():
