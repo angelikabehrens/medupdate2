@@ -5,6 +5,7 @@ erneuter Start genau dort fort."""
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import re
 import traceback
@@ -587,7 +588,7 @@ def export_project(proj: dict) -> bytes:
     """Zwischenstand ohne PDFs und Kandidatenbilder (die Texte sind enthalten) – hält die Datei klein."""
     slim = dict(proj)
     slim["pubs"] = {p: {k: v for k, v in d.items() if k not in ("pdf", "images")} for p, d in proj["pubs"].items()}
-    return json.dumps(slim, default=_enc, ensure_ascii=False).encode("utf-8")
+    return gzip.compress(json.dumps(slim, default=_enc, ensure_ascii=False).encode("utf-8"), 6)
 
 
 def partial_docx(proj: dict) -> bytes | None:
@@ -611,7 +612,12 @@ def partial_docx(proj: dict) -> bytes | None:
 
 
 def import_project(data: bytes) -> dict:
+    """Lädt einen Zwischenstand (komprimiert .json.gz oder ältere unkomprimierte .json)."""
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
     proj = json.loads(data.decode("utf-8"), object_hook=_dec)
+    for d in (proj.get("pubs") or {}).values():  # ältere Zwischenstände: große Binärdaten verwerfen
+        d.pop("images", None)
     base = new_project()
     base.update(proj)
     return base

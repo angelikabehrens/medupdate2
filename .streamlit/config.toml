@@ -1,0 +1,3 @@
+[server]
+# Große Zwischenstände und mehrere Publikations-PDFs auf einmal zulassen (MB)
+maxUploadSize = 500

@@ -64,10 +64,13 @@ with st.sidebar:
     st.header("💾 Zwischenstand")
     st.caption("Die App speichert nichts auf dem Server. Den Zwischenstand hier herunterladen und später "
                "wieder laden, um weiterzuarbeiten.")
-    st.download_button("⬇️ Zwischenstand herunterladen", data=pipeline.export_project(proj),
-                       file_name=f"medupdate2_zwischenstand_{date.today().isoformat()}.json",
-                       mime="application/json")
-    _load = st.file_uploader("Zwischenstand laden", type=["json"], key="load_state")
+    if st.button("💾 Zwischenstand vorbereiten"):
+        st.session_state["_export"] = pipeline.export_project(proj)
+    if st.session_state.get("_export"):
+        st.download_button("⬇️ Zwischenstand herunterladen", data=st.session_state["_export"],
+                           file_name=f"medupdate2_zwischenstand_{date.today().isoformat()}.json.gz",
+                           mime="application/gzip", on_click=lambda: st.session_state.pop("_export", None))
+    _load = st.file_uploader("Zwischenstand laden", type=["gz", "json"], key="load_state")
     if _load is not None and st.button("Laden"):
         st.session_state["proj"] = pipeline.import_project(_load.read())
         st.rerun()
