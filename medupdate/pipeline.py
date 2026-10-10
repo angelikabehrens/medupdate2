@@ -637,27 +637,54 @@ def export_project(proj: dict) -> bytes:
 
 def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
     """Gliederung nach dem hochgeladenen Inhaltsverzeichnis, aber nur mit Themen, zu denen Publikationen
-    im Manuskript stehen; Hauptabschnitte und Themen werden dabei fortlaufend neu nummeriert.
-    Rückgabe je Thema: {"number": "8.1.2" | None, "section": ("8.1", Titel) | None}. Ein Hauptabschnitt mit
-    nur einem gleichnamigen Thema erscheint nur einmal (als Hauptabschnitt)."""
+    im Manuskript stehen; Hauptabschnitte, Unterabschnitte und Themen werden fortlaufend neu nummeriert.
+    Rückgabe je Thema: {"number": "8.1.2.1" | None, "section": ("8.1", Titel) | None,
+    "subsection": ("8.1.2", Titel) | None}. "section"/"subsection" stehen nur beim ersten Thema eines
+    neuen (Unter-)Abschnitts. Ein (Unter-)Abschnitt mit nur einem gleichnamigen Thema erscheint nur einmal."""
     chapter = str((proj.get("toc") or {}).get("chapter_number") or "").strip().rstrip(".")
     prefix = f"{chapter}." if chapter else ""
-    sections: dict[str, list[str]] = {}
+    # Hauptabschnitt -> Einträge (Unterabschnitt mit Themen oder Thema direkt), in TOC-Reihenfolge
+    sections: dict[str, dict[str, list[str]]] = {}
     titles: dict[str, str] = {}
-    for tid in proj["topics"]:  # Reihenfolge des Inhaltsverzeichnisses
+    sub_titles: dict[tuple[str, str], str] = {}
+    for tid in proj["topics"]:
         if tid not in topic_ids:
             continue
         t = proj["topics"][tid]
         key = t.get("section_number") or t.get("section_title") or tid
-        sections.setdefault(key, []).append(tid)
+        sub = t.get("subsection_number") or t.get("subsection_title") or ""
+        child = f"sub:{sub}" if sub else f"topic:{tid}"
+        sections.setdefault(key, {}).setdefault(child, []).append(tid)
         titles.setdefault(key, t.get("section_title") or t["title"])
+        if sub:
+            sub_titles.setdefault((key, sub), t.get("subsection_title") or sub)
+
+    def same(a: str, b: str) -> bool:
+        return a.strip().lower() == b.strip().lower()
+
     out = {}
-    for s_idx, (key, tids) in enumerate(sections.items(), start=1):
+    for s_idx, (key, children) in enumerate(sections.items(), start=1):
         sec_num = f"{prefix}{s_idx}"
-        merged = len(tids) == 1 and titles[key].strip().lower() == proj["topics"][tids[0]]["title"].strip().lower()
-        for t_idx, tid in enumerate(tids, start=1):
-            out[tid] = {"section": (sec_num, titles[key]) if t_idx == 1 else None,
-                        "number": None if merged else f"{sec_num}.{t_idx}"}
+        all_tids = [x for tids in children.values() for x in tids]
+        if len(all_tids) == 1 and same(titles[key], proj["topics"][all_tids[0]]["title"]):
+            out[all_tids[0]] = {"section": (sec_num, titles[key]), "subsection": None, "number": None, "level": 2}
+            continue
+        first = True
+        for c_idx, (child, tids) in enumerate(children.items(), start=1):
+            num = f"{sec_num}.{c_idx}"
+            sec = (sec_num, titles[key]) if first else None
+            first = False
+            if child.startswith("topic:"):
+                out[tids[0]] = {"section": sec, "subsection": None, "number": num, "level": 2}
+                continue
+            st = sub_titles[(key, child[4:])]
+            if len(tids) == 1 and same(st, proj["topics"][tids[0]]["title"]):
+                out[tids[0]] = {"section": sec, "subsection": None, "number": num, "level": 2}
+                continue
+            for t_idx, tid in enumerate(tids, start=1):
+                out[tid] = {"section": sec if t_idx == 1 else None,
+                            "subsection": (num, st) if t_idx == 1 else None,
+                            "number": f"{num}.{t_idx}", "level": 3}
     return out
 
 

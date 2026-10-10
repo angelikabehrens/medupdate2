@@ -25,7 +25,8 @@ def short_citation(rec: dict, lit_numbers: list[int]) -> str:
 
 def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     """blocks: [{"topic": str, "number": str (optional, z.B. "8.1.2"), "section": (Nummer, Titel) oder None
-                 (nur beim ersten Thema eines neuen Hauptabschnitts), "sota": {"text", "literature"} | None,
+                 (nur beim ersten Thema eines neuen Hauptabschnitts), "subsection": ebenso für die
+                 Ebene darunter, "level": 2 oder 3 (Gliederungsebene des Themas), "sota": {"text", "literature"} | None,
                  "pubs": [{"title", "rec", "lines", "abstract", "literature", "figure"}]}]
     Mit Nummern entsteht auf Seite 1 ein Inhaltsverzeichnis (Hauptabschnitte und Themen).
     lang: "Deutsch" oder "Englisch" (für Labels)."""
@@ -43,15 +44,17 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     for b in blocks:
         if b.get("section"):
             toc_lines.append((1, *b["section"]))
+        if b.get("subsection"):
+            toc_lines.append((2, *b["subsection"]))
         if b.get("number"):
-            toc_lines.append((2, b["number"], b["topic"]))
+            toc_lines.append((b.get("level") or 2, b["number"], b["topic"]))
     if toc_lines:
         p = doc.add_paragraph()
         p.add_run("Inhaltsverzeichnis" if lang != "Englisch" else "Contents").bold = True
         for level, num, text in toc_lines:
             tp = doc.add_paragraph(f"{num}\t{text}")
-            if level == 2:
-                tp.paragraph_format.left_indent = Pt(18)
+            if level > 1:
+                tp.paragraph_format.left_indent = Pt(18 * (level - 1))
         doc.add_paragraph("")
     p = doc.add_paragraph()
     p.add_run("Suchbegriffe").bold = True
@@ -71,17 +74,21 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
         if b.get("section"):
             sp = doc.add_paragraph()
             sp.add_run(f"Abschnitt: „{b['section'][0]}\t{b['section'][1]}“").bold = True
+        if b.get("subsection"):
+            up = doc.add_paragraph()
+            up.add_run(f"Unterabschnitt: „{b['subsection'][0]}\t{b['subsection'][1]}“").bold = True
         if b.get("number"):
             mp = doc.add_paragraph()
             mp.add_run(f"Thema: „{b['number']}\t{b['topic']}“").bold = True
-        elif not b.get("section"):
+        elif not (b.get("section") or b.get("subsection")):
             mp = doc.add_paragraph()
             mp.add_run(f"Thema: „{b['topic']}“").bold = True
 
         sota = b.get("sota")
         if sota and sota.get("text"):
             hp = doc.add_paragraph()
-            hp.add_run("State of the Art").bold = True
+            hp.add_run("State of the Art").underline = True
+            doc.add_paragraph("")
             doc.add_paragraph(sota["text"].strip())
             if sota.get("literature"):
                 doc.add_paragraph("")

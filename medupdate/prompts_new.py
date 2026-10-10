@@ -16,6 +16,9 @@ Regeln:
 - "section_number" und "section_title": der Hauptabschnitt (oberste inhaltliche Gliederungsebene \
 unterhalb des Kapitels, z.B. "1." / "2." oder "8.1" / "8.2"), zu dem das Thema gehört. Hat das \
 Inhaltsverzeichnis keine Unterthemen, ist jedes Thema sein eigener Hauptabschnitt.
+- "subsection_number" und "subsection_title": nur wenn das Inhaltsverzeichnis zwischen Hauptabschnitt \
+und Thema eine weitere Gliederungsebene hat (z.B. Hauptabschnitt "8.2", Unterabschnitt "8.2.7", \
+Thema "8.2.7.1"): der Unterabschnitt, zu dem das Thema gehört. Sonst beide leer.
 - "english_search_focus": eine präzise englische Fachbeschreibung des Themas (5–15 Wörter), \
 geeignet als Ausgangspunkt für eine PubMed-Recherche.
 - Erfinde keine Themen, die nicht im Inhaltsverzeichnis stehen.

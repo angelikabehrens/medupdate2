@@ -13,7 +13,8 @@ TOC_SCHEMA = obj({
     "chapter_number": STR,
     "chapter_title": STR,
     "topics": arr(obj({"number": STR, "title": STR, "english_search_focus": STR,
-                        "section_number": STR, "section_title": STR})),
+                        "section_number": STR, "section_title": STR,
+                        "subsection_number": STR, "subsection_title": STR})),
 })
 
 RULES_SCHEMA = obj({

@@ -260,8 +260,9 @@ def copy_document_content_into_template(
     # (Absätze mit Toc-Formatvorlagen vor "Interessenkonflikte") wird dabei ersetzt.
     toc_entries = _source_toc_entries(source_doc)
     if toc_entries:
-        toc1 = "Toc1" if "Toc1" in template_style_names else None
-        toc2 = "Toc2" if "Toc2" in template_style_names else toc1
+        toc_styles = {1: "Toc1" if "Toc1" in template_style_names else None}
+        toc_styles[2] = "Toc2" if "Toc2" in template_style_names else toc_styles[1]
+        toc_styles[3] = "Toc3" if "Toc3" in template_style_names else toc_styles[2]
         anchor = None
         for p in template_paragraphs[: ik_idx if ik_idx is not None else len(template_paragraphs)]:
             if p._element.getparent() is None:
@@ -285,10 +286,11 @@ def copy_document_content_into_template(
         last.addnext(head._element)
         last = head._element
         for num, text in toc_entries:
-            level2 = num.count(".") > min_depth
-            tp = template_doc.add_paragraph(f"{num}\t{text}", style=toc2 if level2 else toc1)
-            if (toc2 if level2 else toc1) is None and level2:
-                tp.paragraph_format.left_indent = Pt(18)
+            level = min(3, num.count(".") - min_depth + 1)
+            tp = template_doc.add_paragraph(f"{num}\t{text}", style=toc_styles[level])
+            # ohne eigene Formatvorlage für die Ebene: Einrückung je Ebene
+            if level > 1 and (toc_styles[level] is None or toc_styles[level] == toc_styles[level - 1]):
+                tp.paragraph_format.left_indent = Pt(18 * (level - 1))
             last.addnext(tp._element)
             last = tp._element
 
@@ -320,6 +322,12 @@ def copy_document_content_into_template(
     source_paragraphs = list(source_doc.paragraphs)
     theme_marker_re = re.compile(r"^(?:Themensuche|Thema):\s*„(.+)“$")
     section_marker_re = re.compile(r"^Abschnitt:\s*„(.+)“$")
+    subsection_marker_re = re.compile(r"^Unterabschnitt:\s*„(.+)“$")
+    section_depths = [
+        m.group(1).split("\t")[0].count(".") for p in source_paragraphs
+        if (m := section_marker_re.match(p.text.strip()))
+    ]
+    base_depth = min(section_depths) if section_depths else None
     first_heading2_idx = next(
         (i for i, p in enumerate(source_paragraphs) if p.style.name == "Heading 2"), 0
     )
@@ -336,6 +344,7 @@ def copy_document_content_into_template(
     image_caption_style = "ImageSubtitle" if "ImageSubtitle" in template_style_names else None
     toc1_style = "Toc1" if "Toc1" in template_style_names else None
     toc2_style = "Toc2" if "Toc2" in template_style_names else None
+    toc3_style = "Toc3" if "Toc3" in template_style_names else None
 
     i = start_idx
     theme_counter = 0
@@ -374,13 +383,29 @@ def copy_document_content_into_template(
             i += 1
             continue
 
+        subsection_match = subsection_marker_re.match(text_stripped)
+        if subsection_match:
+            # Unterabschnitt ("8.1.2<TAB>Titel") als Toc2
+            up = template_doc.add_paragraph(subsection_match.group(1), style=toc2_style)
+            if toc2_style is None:
+                for run in up.runs:
+                    run.bold = True
+            i += 1
+            continue
+
         theme_match = theme_marker_re.match(text_stripped)
         if theme_match and re.match(r"^\d+(?:\.\d+)*\t", theme_match.group(1)):
-            # Thema mit fertiger Nummer aus der Gliederung ("8.1.2<TAB>Titel") als Toc2
-            tp = template_doc.add_paragraph(theme_match.group(1), style=toc2_style)
-            if toc2_style is None:
+            # Thema mit fertiger Nummer aus der Gliederung ("8.1.2<TAB>Titel") als Toc2, eine Ebene
+            # tiefer (unter einem Unterabschnitt, "8.1.2.1") als Toc3
+            depth = theme_match.group(1).split("\t")[0].count(".")
+            deep = base_depth is not None and depth >= base_depth + 2
+            style = (toc3_style or toc2_style) if deep else toc2_style
+            tp = template_doc.add_paragraph(theme_match.group(1), style=style)
+            if style is None:
                 for run in tp.runs:
                     run.bold = True
+            if deep and toc3_style is None:
+                tp.paragraph_format.left_indent = Pt(18)
             i += 1
             continue
         if theme_match:
@@ -398,6 +423,16 @@ def copy_document_content_into_template(
             if toc2_style is None:
                 for run in toc2_p.runs:
                     run.bold = True
+            i += 1
+            continue
+
+        if re.fullmatch(r"state of the art", text_stripped, re.IGNORECASE):
+            # Überschrift des State of the Art: unterstrichen, nicht fett, mit Leerzeile darunter
+            hp = template_doc.add_paragraph()
+            run = hp.add_run(text_stripped)
+            run.underline = True
+            run.bold = False
+            template_doc.add_paragraph("")
             i += 1
             continue
 

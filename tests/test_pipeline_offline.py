@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fitz
 from docx import Document
 
-from medupdate import guidelines, pipeline, pubmed, references
+from medupdate import docx_tools, guidelines, manuscript, pipeline, pubmed, references
 
 APPRAISAL = """1. Strengths of the Study
 Randomized design with 1,200 patients (2).
@@ -200,6 +200,11 @@ def test_full_pipeline(monkeypatch=None):
     assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
     i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")
     assert i_sota == i_t2 + 1, "State of the Art vor dem Thema mit den meisten Publikationen"
+    paras = doc.paragraphs
+    k = next(i for i, p in enumerate(paras) if p.text == "State of the Art")
+    run = paras[k].runs[0]
+    assert run.underline and not run.bold, "State of the Art unterstrichen, nicht fett"
+    assert paras[k + 1].text == "" and paras[k + 2].text.strip(), "eine Leerzeile unter der Überschrift"
     toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
     print("GLIEDERUNG", toc)
     expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),
@@ -345,10 +350,46 @@ def test_length_budget():
     assert not overflow and tiers["0"] != "½ Seite (Kurz)" and tiers["4"] == "½ Seite (Kurz)"
 
 
+def test_outline_levels():
+    """Vierte Gliederungsebene: Hauptabschnitt > Unterabschnitt > Thema, neu nummeriert."""
+    def t(title, sec, sub=""):
+        return {"title": title, "section_number": sec, "section_title": f"Abschnitt {sec}",
+                "subsection_number": sub, "subsection_title": f"Unter {sub}" if sub else ""}
+    proj = {"toc": {"chapter_number": "8"}, "topics": {
+        "T1": t("Direkt", "8.1"),
+        "T2": t("Leer", "8.2", "8.2.1"),
+        "T3": t("Varizen A", "8.2", "8.2.7"),
+        "T4": t("Varizen B", "8.2", "8.2.7"),
+        "T5": t("Einzeln", "8.2", "8.2.8"),
+    }}
+    g = pipeline.outline(proj, ["T1", "T3", "T4", "T5"])
+    assert g["T1"] == {"section": ("8.1", "Abschnitt 8.1"), "subsection": None, "number": "8.1.1", "level": 2}
+    assert g["T3"]["section"] == ("8.2", "Abschnitt 8.2") and g["T3"]["subsection"] == ("8.2.1", "Unter 8.2.7")
+    assert g["T3"]["number"] == "8.2.1.1" and g["T4"]["number"] == "8.2.1.2" and g["T4"]["subsection"] is None
+    assert g["T5"]["subsection"] == ("8.2.2", "Unter 8.2.8") and g["T5"]["number"] == "8.2.2.1"
+
+    blocks = [{"topic": proj["topics"][tid]["title"], "sota": None, "pubs": [], **g[tid]}
+              for tid in ("T1", "T3", "T4", "T5")]
+    raw = Document(io.BytesIO(manuscript.build_docx("Titel", blocks, "Deutsch")))
+    d = Document(io.BytesIO(_template()))
+    d.styles.add_style("Toc3", 1)
+    b = io.BytesIO()
+    d.save(b)
+    out = Document(io.BytesIO(docx_tools.copy_document_content_into_template(raw, b.getvalue())))
+    toc = [(p.style.name, p.text) for p in out.paragraphs if p.style.name.startswith("Toc")]
+    expected = [("Toc1", "8.1\tAbschnitt 8.1"), ("Toc2", "8.1.1\tDirekt"),
+                ("Toc1", "8.2\tAbschnitt 8.2"), ("Toc2", "8.2.1\tUnter 8.2.7"),
+                ("Toc3", "8.2.1.1\tVarizen A"), ("Toc3", "8.2.1.2\tVarizen B"),
+                ("Toc2", "8.2.2\tUnter 8.2.8"), ("Toc3", "8.2.2.1\tEinzeln")]
+    assert toc[:8] == expected, toc
+    assert toc[8:] == expected, toc
+
+
 if __name__ == "__main__":
     test_llm_retry_and_cost()
     test_results_saved_before_abort()
     test_search_broadening()
     test_length_budget()
+    test_outline_levels()
     test_full_pipeline()
     print("OK")
