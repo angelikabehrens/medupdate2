@@ -537,7 +537,34 @@ def test_reassign_topics():
     assert pipeline.assignment_docx(proj)[:2] == b"PK"
 
 
+def test_enforce_pub_limit():
+    def it(q):
+        return {"quality": q, "length_score": q, "evidence": q}
+    proj = {"rules": {}, "manual_limits": {"publications": 3},
+            "records": {p: {"title": f"Studie {p}"} for p in "abcde"},
+            "topics": {"T1": {"id": "T1", "title": "Eins", "recommended": ["a", "b", "c"],
+                              "ranking": {"a": it(90), "b": it(40), "c": it(70)}},
+                       "T2": {"id": "T2", "title": "Zwei", "recommended": ["d"], "ranking": {"d": it(60), "e": it(10)}}},
+            "pubs": {"e": {"extra": True, "topic_id": "T2"}}}
+    dropped = pipeline.enforce_pub_limit(proj, lambda m: None)
+    assert [e["id"] for e in dropped] == ["e", "b"], dropped
+    assert set(pipeline.current_topics(proj)) == {"a", "c", "d"}
+    assert "b" not in proj["topics"]["T1"].get("reserve", []) and proj["pubs"]["e"]["limit_dropped"]
+    rev = proj["sel_rev"]
+    proj["manual_limits"] = {"publications": 4}
+    pipeline.enforce_pub_limit(proj, lambda m: None)
+    assert set(pipeline.current_topics(proj)) == {"a", "b", "c", "d"} and proj["sel_rev"] > rev
+    proj["manual_limits"] = {"publications": 0}
+    assert pipeline.enforce_pub_limit(proj, lambda m: None) == [] and len(pipeline.current_topics(proj)) == 5
+    # Seitenumfang: 4 Seiten inkl. Titelseite reichen nicht für alle fünf
+    proj["manual_limits"] = {"pages": 3}
+    proj["limit_tolerance"] = {"mode": "absolute", "value": 0}
+    dropped = pipeline.enforce_pub_limit(proj, lambda m: None)
+    assert dropped and dropped[0]["id"] == "e" and "Seitenumfang" in dropped[0]["reason"]
+
+
 if __name__ == "__main__":
+    test_enforce_pub_limit()
     test_reassign_topics()
     test_llm_retry_and_cost()
     test_results_saved_before_abort()

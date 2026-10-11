@@ -144,7 +144,7 @@ with st.form("step1"):
     with c3:
         guide_file = st.file_uploader("Hinweise für Autoren", type=["docx", "pdf", "txt"])
     _lim = proj.get("manual_limits") or {}
-    l1, l2 = st.columns(2)
+    l1, l2, l3 = st.columns(3)
     lim_pages = l1.number_input("Anzahl Manuskriptseiten (ohne Inhaltsverzeichnis)", min_value=0, max_value=500,
                                 value=int(_lim.get("pages") or 0), step=1,
                                 help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
@@ -153,6 +153,11 @@ with st.form("step1"):
                                value=int(_lim.get("references") or 0), step=1,
                                help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
                                      f"{pipeline.tolerance_text(proj)}.")
+    lim_pubs = l3.number_input("Höchstzahl gewürdigter Publikationen", min_value=0, max_value=500,
+                               value=int(_lim.get("publications") or 0), step=1,
+                               help="0 = keine feste Zahl (es gilt nur der Seitenumfang). Wird nicht überschritten: "
+                                    "nach Hochladen und Sortieren entfernt die App bei Bedarf die Studien mit der "
+                                    "geringsten Qualität.")
     b_win, b_go = st.columns([1, 3])
     with b_win.popover("📅 Suchzeitraum"):
         _months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
@@ -186,7 +191,7 @@ if go1:
         st.warning("Bitte das Inhaltsverzeichnis hochladen.")
     elif llm:
         proj["email"] = email.strip()
-        proj["manual_limits"] = {"pages": int(lim_pages), "references": int(lim_refs)}
+        proj["manual_limits"] = {"pages": int(lim_pages), "references": int(lim_refs), "publications": int(lim_pubs)}
         if win_manual:
             _last = calendar.monthrange(int(bis_y), int(bis_m))[1]
             proj["search_window"] = [date(int(von_y), int(von_m), 1).isoformat(),
@@ -211,10 +216,12 @@ if proj.get("toc"):
     if rules:
         with st.expander("📋 Erkannte Vorgaben aus den Hinweisen für Autoren"):
             st.json({k: v for k, v in rules.items() if v and not k.startswith("_")})
-    if (proj.get("manual_limits") or {}).get("pages") or (proj.get("manual_limits") or {}).get("references"):
+    _ml = proj.get("manual_limits") or {}
+    if _ml.get("pages") or _ml.get("references") or _ml.get("publications"):
         st.caption(f"Manuelle Vorgaben (Überschreitung um höchstens {pipeline.tolerance_text(proj)}): "
                    f"Obergrenze {rules.get('max_pages', 0) - 1 if rules.get('max_pages') else '–'} Seiten ohne "
-                   f"Inhaltsverzeichnis, {rules.get('max_references') or '–'} Literaturstellen.")
+                   f"Inhaltsverzeichnis, {rules.get('max_references') or '–'} Literaturstellen"
+                   + (f", höchstens {_ml['publications']} gewürdigte Publikationen." if _ml.get("publications") else "."))
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")
@@ -261,7 +268,9 @@ if proj.get("toc"):
                         st.caption(f"{q['name']}: {a['hits'].get(q['name'], '?')} Treffer")
             selected = list(t.get("selected", rec_ids))
             ranking = t.get("ranking", {})
-            for pmid in rec_ids + t.get("reserve", []):
+            moved_to = pipeline.current_topics(proj)
+            limit_dropped = {e["id"]: e["reason"] for e in proj.get("limit_dropped", [])}
+            for pmid in dict.fromkeys(rec_ids + t.get("reserve", [])):
                 rec = proj["records"].get(pmid, {})
                 it = ranking.get(pmid, {})
                 oa = " · 🔓 Open Access" if rec.get("is_oa") else ""
@@ -273,7 +282,13 @@ if proj.get("toc"):
                          f"{it.get('study_design', '')} · [PubMed](https://pubmed.ncbi.nlm.nih.gov/{pmid}/)"
                          + (f" · [DOI](https://doi.org/{rec['doi']})" if rec.get("doi") else "")
                          + f"  \n_{it.get('rationale', '')}_")
-                checked = st.checkbox(label, value=pmid in selected, key=f"sel_{tid}_{pmid}")
+                if pmid in limit_dropped:
+                    label += f"  \n✂️ wegen der Vorgaben entfernt ({limit_dropped[pmid]})"
+                elsewhere = moved_to.get(pmid)
+                if elsewhere and elsewhere != tid:
+                    label += f"  \n↪ verschoben nach „{proj['topics'][elsewhere]['title']}“"
+                checked = st.checkbox(label, value=pmid in selected, key=f"sel_{tid}_{pmid}_{proj.get('sel_rev', 0)}",
+                                      disabled=bool(elsewhere and elsewhere != tid))
                 if checked and pmid not in selected:
                     selected.append(pmid)
                 if not checked and pmid in selected:
@@ -388,6 +403,8 @@ if any("recommended" in t for t in proj["topics"].values()):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.reassign_topics(llm, proj, log)
+                pipeline.rate_unranked(llm, proj, log)
+                pipeline.enforce_pub_limit(proj, log)
 
             def step2(log):
                 if uploads:
@@ -404,7 +421,9 @@ if any("recommended" in t for t in proj["topics"].values()):
     if proj.get("reassigned_for"):
         overview = pipeline.assignment_overview(proj)
         n_moved = sum(1 for r in overview if r["kind"] == "topic" for x in r["pubs"] if x["moved_from"])
-        with st.expander(f"📋 Themenzuordnung der Publikationen ({n_moved} verschoben)", expanded=go_check):
+        n_pubs = sum(len(r["pubs"]) for r in overview if r["kind"] == "topic")
+        with st.expander(f"📋 Themenzuordnung: {n_pubs} Publikationen ({n_moved} verschoben, "
+                         f"{len(proj.get('limit_dropped', []))} wegen der Vorgaben entfernt)", expanded=go_check):
             st.caption("Überschriften des Inhaltsverzeichnisses mit den zugeordneten Publikationen. ↪ = von der KI "
                        "(oder von Ihnen) in ein anderes Thema verschoben, 🔗 = gemeinsame Würdigung. Ändern Sie eine "
                        "Zuordnung bei Bedarf unten; die KI übernimmt Ihre Festlegung.")
@@ -420,6 +439,11 @@ if any("recommended" in t for t in proj["topics"].values()):
                     if x["joint"]:
                         line += f"  \n  🔗 Gemeinsame Würdigung: {x['joint']}"
                     st.markdown(line)
+            if proj.get("limit_dropped"):
+                st.markdown(f"**✂️ Wegen der Vorgaben nicht aufgenommen ({len(proj['limit_dropped'])}, geringste "
+                            "Studienqualität zuerst):**")
+                for e in proj["limit_dropped"]:
+                    st.markdown(f"- {e['title']} — {proj['topics'].get(e['topic_id'], {}).get('title', '')} · {e['reason']}")
             st.download_button("⬇️ Themenzuordnung als Word-Datei", pipeline.assignment_docx(proj),
                                f"Themenzuordnung_{date.today().isoformat()}.docx", DOCX_MIME)
             cur = pipeline.current_topics(proj)

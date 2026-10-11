@@ -149,6 +149,8 @@ def apply_manual_limits(proj: dict) -> None:
     rules["max_pages"] = effective_limit(lim["pages"], tol) + 1 if lim.get("pages") else guide["max_pages"]
     rules["max_references"] = (effective_limit(lim["references"], tol) if lim.get("references")
                                else guide["max_references"])
+    # Höchstzahl gewürdigter Publikationen: genau der eingegebene Wert (keine Toleranz)
+    rules["max_publications"] = int(lim.get("publications") or 0)
 
 
 def tolerance_text(proj: dict) -> str:
@@ -375,6 +377,18 @@ def current_topics(proj: dict) -> dict[str, str]:
     return {p: t for p, t in _pub_list(proj) if not proj["pubs"].get(p, {}).get("group")}
 
 
+def bump_selection(proj: dict) -> None:
+    """Die Auswahl wurde vom Programm geändert: die Ankreuzfelder in Schritt 1 übernehmen den neuen Stand."""
+    proj["sel_rev"] = proj.get("sel_rev", 0) + 1
+
+
+def _unselect_everywhere(proj: dict, p: str, keep: str = "") -> None:
+    """Dieselbe Arbeit kann in Schritt 1 für mehrere Themen empfohlen worden sein."""
+    for tid, t in proj["topics"].items():
+        if tid != keep and p in t.get("selected", t.get("recommended", [])):
+            t["selected"] = [x for x in t.get("selected", t.get("recommended", [])) if x != p]
+
+
 def move_pub(proj: dict, p: str, dst: str) -> None:
     """Verschiebt eine Publikation in ein anderes Thema (die Bewertung aus Schritt 1 wandert mit)."""
     src = current_topics(proj).get(p)
@@ -382,11 +396,12 @@ def move_pub(proj: dict, p: str, dst: str) -> None:
         return
     d = proj["pubs"].setdefault(p, {})
     d.setdefault("home_topic", src)
+    bump_selection(proj)
     if d.get("extra"):
         d["topic_id"] = dst
         return
     s_t, d_t = proj["topics"][src], proj["topics"][dst]
-    s_t["selected"] = [x for x in s_t.get("selected", s_t.get("recommended", [])) if x != p]
+    _unselect_everywhere(proj, p, keep=dst)
     d_t["selected"] = list(d_t.get("selected", d_t.get("recommended", []))) + [p]
     if p in s_t.get("ranking", {}):
         d_t.setdefault("ranking", {})[p] = s_t["ranking"][p]
@@ -401,6 +416,7 @@ def reassign_topics(llm: LLM, proj: dict, log, force: bool = False) -> None:
     Arbeit entscheidet (klinisch → Krankheitsbild, technischer Aspekt → Verfahren); Arbeiten mit nahezu
     gleicher Fragestellung kommen ins selbe Thema und werden als Gruppe vorgemerkt."""
     ensure_varia(proj)
+    _restore_limit_dropped(proj)  # wegen der Vorgaben entfernte Arbeiten zählen mit; enforce_pub_limit folgt
     if not force and proj.get("reassigned_for") == _reassign_key(proj):
         return
     cur = current_topics(proj)
@@ -465,6 +481,115 @@ def reassign_topics(llm: LLM, proj: dict, log, force: bool = False) -> None:
         "Fragestellung.")
 
 
+def rate_unranked(llm: LLM, proj: dict, log) -> None:
+    """Zusätzlich hochgeladene Publikationen haben noch keine Qualitätsbewertung aus Schritt 1: Bewertung
+    mit demselben Ranking (Studienqualität, Bedeutung der Fragestellung, Impact Factor) nachholen."""
+    by_topic: dict[str, list[str]] = {}
+    for p, tid in current_topics(proj).items():
+        if p not in proj["topics"][tid].get("ranking", {}) and not proj["pubs"].get(p, {}).get("rank_tried"):
+            by_topic.setdefault(tid, []).append(p)
+    for tid, ids in by_topic.items():
+        t = proj["topics"][tid]
+        log(f"Qualität von {len(ids)} hochgeladenen Publikation(en) in „{t['title']}“ wird bewertet…")
+        recs = []
+        for p in ids:
+            proj["pubs"].setdefault(p, {})["rank_tried"] = True
+            rec, d = proj["records"].get(p, {}), proj["pubs"].get(p, {})
+            recs.append({"pmid": p, "title": rec.get("title", p), "journal": rec.get("journal", ""),
+                         "year": rec.get("year", ""), "pub_types": rec.get("pub_types") or [],
+                         "abstract": rec.get("abstract") or _main_text(d.get("full_text", ""))[:3500]})
+        try:
+            ranking = recommend.rank(llm, t, "", recs, "des gewählten Zeitraums")
+        except AccountError:
+            raise
+        except Exception as ex:
+            _err(proj, f"Qualitätsbewertung {t['title']}", ex)
+            continue
+        for p, item in ranking.items():
+            item["score"] = recommend.score(item)
+            item["priority"] = recommend.priority_class(item)
+            item["quality"] = recommend.quality(item)
+            item["length_score"] = recommend.length_score(item)
+            t.setdefault("ranking", {})[p] = item
+
+
+def _restore_limit_dropped(proj: dict) -> None:
+    for e in proj.get("limit_dropped", []):
+        p, tid = e["id"], e["topic_id"]
+        d = proj["pubs"].get(p, {})
+        if d.get("extra"):
+            d.pop("limit_dropped", None)
+            continue
+        t = proj["topics"].get(tid)
+        if not t:
+            continue
+        if e.get("to_reserve"):
+            t["reserve"] = [x for x in t.get("reserve", []) if x != p]
+        sel = list(t.get("selected", t.get("recommended", [])))
+        if p not in sel:
+            t["selected"] = sel + [p]
+    if proj.get("limit_dropped"):
+        bump_selection(proj)
+    proj["limit_dropped"] = []
+
+
+def enforce_pub_limit(proj: dict, log) -> list[dict]:
+    """Nach Hochladen und Sortieren: Höchstzahl der Publikationen und Seitenumfang einhalten. Ist eines davon
+    überschritten, werden die Studien mit der geringsten Qualität (Qualitätsranking aus Schritt 1) entfernt –
+    bevor Kosten für Würdigungen entstehen. Wird neu berechnet, sobald sich Auswahl oder Vorgaben ändern."""
+    apply_manual_limits(proj)
+    _restore_limit_dropped(proj)
+    rules = proj.get("rules") or {}
+    max_n, max_pages = rules.get("max_publications") or 0, rules.get("max_pages") or 0
+    cur = current_topics(proj)
+    if not cur or not (max_n or max_pages):
+        return []
+
+    def rank(p):
+        it = proj["topics"][cur[p]].get("ranking", {}).get(p, {})
+        return (it.get("quality", recommend.quality(it) if it else 0), it.get("length_score", 0))
+
+    def units(ids):
+        # Publikationen mit gleicher Fragestellung werden gemeinsam gewürdigt und brauchen nur einmal Platz
+        out, seen = [], set()
+        for g in proj.get("question_groups", []):
+            m = [p for p in g["pmids"] if p in ids and cur.get(p) == cur.get(g["pmids"][0])]
+            if len(m) >= 2:
+                seen.update(m)
+                out.append({"id": "+".join(m), "length_score": max(rank(p)[1] for p in m)})
+        return out + [{"id": p, "length_score": rank(p)[1]} for p in ids if p not in seen]
+
+    def too_long(ids):
+        if not max_pages:
+            return False
+        _tiers, overflow = A.plan_tiers(units(ids), rules, _n_sections(proj, {cur[p] for p in ids}))
+        return bool(overflow)
+
+    keep = sorted(cur, key=rank, reverse=True)
+    dropped = []
+    while len(keep) > 1 and ((max_n and len(keep) > max_n) or too_long(keep)):
+        p = keep.pop()
+        reason = (f"Höchstzahl von {max_n} Publikationen" if max_n and len(keep) >= max_n
+                  else f"Seitenumfang (max. {max_pages - 1} Seiten)")
+        dropped.append({"id": p, "topic_id": cur[p], "reason": reason,
+                        "title": proj["records"].get(p, {}).get("title", p)})
+    for e in dropped:
+        p, t = e["id"], proj["topics"][e["topic_id"]]
+        d = proj["pubs"].setdefault(p, {})
+        if d.get("extra"):
+            d["limit_dropped"] = True
+        else:
+            _unselect_everywhere(proj, p)
+            if p not in t.get("recommended", []) and p not in t.get("reserve", []):
+                t.setdefault("reserve", []).insert(0, p)
+                e["to_reserve"] = True
+    proj["limit_dropped"] = dropped
+    if dropped:
+        bump_selection(proj)
+        log(f"{len(dropped)} Publikation(en) mit der geringsten Studienqualität wegen der Vorgaben entfernt.")
+    return dropped
+
+
 def set_manual_topic(proj: dict, p: str, tid: str) -> None:
     """Zuordnung durch die Nutzerin; die KI-Prüfung ändert sie danach nicht mehr."""
     proj.setdefault("topic_manual", {})[p] = tid
@@ -510,7 +635,7 @@ def assignment_docx(proj: dict) -> bytes:
             continue
         doc.add_heading(row["text"], level=3)
         if not row["pubs"]:
-            doc.add_paragraph("Keine Publikation (entfällt im Manuskript).").italic = True
+            doc.add_paragraph().add_run("Keine Publikation (entfällt im Manuskript).").italic = True
         for x in row["pubs"]:
             para = doc.add_paragraph(style="List Bullet")
             para.add_run(f"{x['title']} — {x['journal']} {x['year']}".strip())
@@ -519,6 +644,11 @@ def assignment_docx(proj: dict) -> bytes:
                 ([f"gemeinsame Würdigung: {x['joint']}"] if x["joint"] else [])
             if notes:
                 para.add_run(" (" + "; ".join(notes) + ")").italic = True
+    if proj.get("limit_dropped"):
+        doc.add_heading("Wegen der Vorgaben nicht aufgenommen", level=2)
+        for e in proj["limit_dropped"]:
+            doc.add_paragraph(f"{e['title']} ({proj['topics'].get(e['topic_id'], {}).get('title', '')}; {e['reason']})",
+                              style="List Bullet")
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
@@ -530,14 +660,17 @@ def assignment_docx(proj: dict) -> bytes:
 
 def _pub_list(proj: dict) -> list[tuple[str, str]]:
     """[(pmid, topic_id)] in Manuskript-Reihenfolge: Themen wie im Inhaltsverzeichnis, darin nach Score."""
-    out = []
+    out, seen = [], set()
     for tid, t in proj["topics"].items():
         if not t.get("enabled", True):
             continue
-        ids = list(t.get("selected", t.get("recommended", [])))
-        ids += [p for p, d in proj["pubs"].items() if d.get("extra") and d.get("topic_id") == tid and p not in ids]
+        # Eine Publikation steht nur einmal im Manuskript (z.B. nach Verschieben in ein anderes Thema)
+        ids = [p for p in t.get("selected", t.get("recommended", [])) if p not in seen]
+        ids += [p for p, d in proj["pubs"].items() if d.get("extra") and d.get("topic_id") == tid and p not in ids
+                and not d.get("limit_dropped")]
         rk = t.get("ranking", {})
         ids.sort(key=lambda p: -rk.get(p, {}).get("score", 0))
+        seen.update(ids)
         out.extend((p, tid) for p in ids)
     return out
 
@@ -617,6 +750,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             raise
         except Exception as ex:
             _err(proj, "Themenzuordnung prüfen", ex)
+    rate_unranked(llm, proj, log)
+    enforce_pub_limit(proj, log)
     pubs = _pub_list(proj)
     if options.get("trial"):
         # Probelauf: gewähltes (sonst erstes) Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur
