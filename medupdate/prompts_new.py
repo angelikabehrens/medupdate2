@@ -183,7 +183,8 @@ Text:
 
 def topic_assign_prompt(topics_block: str, pubs_block: str) -> str:
     return f"""Ordne jede Publikation genau einem Thema des Handbuchkapitels zu. Wähle das Thema, zu \
-dem die Publikation inhaltlich am besten passt. Passt sie zu keinem Thema, gib die Themen-ID "" zurück.
+dem die Publikation inhaltlich am besten passt. Passt sie inhaltlich zu keinem Thema wirklich, gib die \
+Themen-ID "" zurück; sie erscheint dann im Manuskript unter „Varia“.
 
 Themen:
 {topics_block}

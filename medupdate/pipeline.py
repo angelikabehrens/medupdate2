@@ -127,7 +127,7 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
     rules = proj.get("rules") or {}
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
     window = proj.get("search_window")  # manuell eingestellt; bei Änderung werden die Themen neu gesucht
-    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True)
+    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and not t.get("varia")
             and ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window))]
 
     def work(t):
@@ -293,15 +293,40 @@ def match_uploads(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
 
     if extra:
         topics_block = "\n".join(f"{t['id']}: {t['title']}" for t in proj["topics"].values() if t.get("enabled", True))
-        pubs_block = "\n".join(f"{p}: {proj['records'].get(p, {}).get('title', '')}" for p in extra)
+        pubs_block = "\n".join(
+            f"{p}: {proj['records'].get(p, {}).get('title', '')} – "
+            + " ".join((proj["records"].get(p, {}).get("abstract") or proj["pubs"][p].get("full_text", "")[:600]).split())[:500]
+            for p in extra)
         try:
             data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, max_tokens=3000,
                             effort="low")
             for a in data.get("assignments", []):
                 if a["key"] in proj["pubs"] and a["topic_id"] in proj["topics"]:
                     proj["pubs"][a["key"]]["topic_id"] = a["topic_id"]
+        except AccountError:
+            raise
         except Exception as ex:
             _err(proj, "Themenzuordnung", ex)
+        ensure_varia(proj)
+
+
+VARIA = "VARIA"
+
+
+def ensure_varia(proj: dict) -> None:
+    """Hochgeladene Publikationen, die zu keinem Thema des Inhaltsverzeichnisses passen, kommen unter
+    den Inhaltspunkt „Varia“ (eigener, letzter Abschnitt ohne Literaturrecherche und ohne State of the Art)."""
+    orphans = [p for p, d in proj["pubs"].items() if d.get("extra") and not d.get("group")
+               and (d.get("topic_id") or "") not in proj["topics"]]
+    if not orphans:
+        return
+    if VARIA not in proj["topics"]:
+        proj["topics"][VARIA] = {"id": VARIA, "title": "Varia", "number": "", "english_search_focus": "",
+                                 "section_number": "Varia", "section_title": "Varia", "enabled": True,
+                                 "varia": True, "recommended": [], "reserve": [], "ranking": {}, "guidelines": [],
+                                 "window": ["", ""], "n_candidates": 0}
+    for p in orphans:
+        proj["pubs"][p]["topic_id"] = VARIA
 
 
 # ======================================================================
@@ -388,6 +413,7 @@ def _pick_figure(llm: LLM, title: str, images: list[bytes]) -> dict | None:
 
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
+    ensure_varia(proj)
     pubs = _pub_list(proj)
     if options.get("trial"):
         # Probelauf: gewähltes (sonst erstes) Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur
@@ -500,7 +526,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     counts = {t: sum(len(proj["pubs"][p].get("group") or [p]) for p, tt in ready if tt == t) for t in topic_ids}
     best_q = {t: max((recommend.quality(_rank_item(proj, p, t)) for p, tt in ready if tt == t),
                      default=0.0) for t in topic_ids}
-    sota_ids = A.sota_topics(topic_ids, proj["topics"], counts, best_q)
+    sota_ids = [t for t in A.sota_topics(topic_ids, proj["topics"], counts, best_q)
+                if not proj["topics"][t].get("varia")]
     proj["sota_topics"] = sota_ids
 
     def first_pub(tid):

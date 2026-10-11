@@ -213,6 +213,14 @@ if proj.get("toc"):
                       if lp.get("overflow") else "."))
 
     for tid, t in proj["topics"].items():
+        if t.get("varia"):
+            extras = [p for p, d in proj["pubs"].items() if d.get("extra") and d.get("topic_id") == tid]
+            with st.expander(f"📚 Varia – {len(extras)} hochgeladene Publikation(en) ohne passendes Thema"):
+                t["enabled"] = st.checkbox("Varia in das Manuskript aufnehmen", value=t.get("enabled", True),
+                                           key=f"en_{tid}")
+                for p in extras:
+                    st.markdown(f"- {proj['records'].get(p, {}).get('title', p)}")
+            continue
         rec_ids = t.get("recommended")
         head = f"{t.get('number', '')} {t['title']}".strip()
         with st.expander(f"📚 {head}" + (f" – {len(rec_ids)} Empfehlungen" if rec_ids is not None else "")):

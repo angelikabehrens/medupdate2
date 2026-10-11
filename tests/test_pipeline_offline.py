@@ -212,6 +212,8 @@ def test_full_pipeline(monkeypatch=None):
     done = [p for p, d in proj["pubs"].items() if d.get("appraisal_en") and not d.get("group")]
     assert len(done) == 2, "Probelauf: höchstens 2 Publikationen"
     assert pipeline.partial_docx(proj)
+    pipeline.match_uploads(llm, proj, {"c.pdf": _pdf_with_image("Knee arthroplasty outcomes in athletes. " * 300)}, log)
+    assert "VARIA" in proj["topics"], "Upload ohne passendes Thema kommt unter Varia"
     pipeline.run_manuscript(llm, proj, log, {"figures": True, "sota": True, "style": True})
     assert not proj["errors"], proj["errors"]
     out = proj["outputs"]
@@ -244,9 +246,9 @@ def test_full_pipeline(monkeypatch=None):
     toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
     print("GLIEDERUNG", toc)
     expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),
-                ("Toc1", "8.2\tDritter Abschnitt"), ("Toc2", "8.2.1\tThema Vier")]
-    assert toc[:5] == expected, "Inhaltsverzeichnis auf Seite 1, leerer Abschnitt entfernt und neu nummeriert"
-    assert toc[5:] == expected, "gleiche Nummern als Überschriften im Text"
+                ("Toc1", "8.2\tDritter Abschnitt"), ("Toc2", "8.2.1\tThema Vier"), ("Toc1", "8.3\tVaria")]
+    assert toc[:6] == expected, "Inhaltsverzeichnis auf Seite 1, leerer Abschnitt entfernt und neu nummeriert"
+    assert toc[6:] == expected, "gleiche Nummern als Überschriften im Text"
     assert not any("Leerer Abschnitt" in t or "Thema Drei" in t for _, t in toc)
     texts = [p.text for p in doc.paragraphs]
     assert texts.index("Inhalt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
