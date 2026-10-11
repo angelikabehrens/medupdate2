@@ -123,7 +123,7 @@ def run_intake(llm: LLM, proj: dict, toc_text: str, guide_text: str, template: t
 
 
 # Toleranz für die manuell eingegebenen Obergrenzen (Seiten, Literaturstellen)
-LIMIT_TOLERANCE = {"mode": "percent", "value": 10}
+LIMIT_TOLERANCE = {"mode": "absolute", "value": 10}
 
 
 def effective_limit(value: int, tol: dict | None = None) -> int:
@@ -153,7 +153,9 @@ def apply_manual_limits(proj: dict) -> None:
 
 def tolerance_text(proj: dict) -> str:
     tol = proj.get("limit_tolerance") or LIMIT_TOLERANCE
-    return f"{tol['value']} %" if tol.get("mode") != "absolute" else f"{tol['value']}"
+    if tol.get("mode") != "absolute":
+        return f"{tol['value']} %"
+    return f"{tol['value']} Seiten bzw. {tol['value']} Literaturstellen"
 
 
 def run_recommendations(llm: LLM, proj: dict, log) -> None:

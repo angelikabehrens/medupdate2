@@ -464,14 +464,14 @@ def test_manual_window():
 def test_manual_limits():
     proj = {"rules": {"max_pages": 30, "max_references": 80}, "manual_limits": {"pages": 20, "references": 50}}
     pipeline.apply_manual_limits(proj)
-    assert proj["rules"]["max_pages"] == 23 and proj["rules"]["max_references"] == 55, proj["rules"]
+    assert proj["rules"]["max_pages"] == 31 and proj["rules"]["max_references"] == 60, proj["rules"]
     proj["manual_limits"] = {"pages": 0, "references": 0}
     pipeline.apply_manual_limits(proj)
     assert proj["rules"]["max_pages"] == 30 and proj["rules"]["max_references"] == 80, "zurück zu den Hinweisen"
-    proj["limit_tolerance"] = {"mode": "absolute", "value": 10}
+    proj["limit_tolerance"] = {"mode": "percent", "value": 10}
     proj["manual_limits"] = {"pages": 20, "references": 50}
     pipeline.apply_manual_limits(proj)
-    assert proj["rules"]["max_pages"] == 31 and proj["rules"]["max_references"] == 60
+    assert proj["rules"]["max_pages"] == 23 and proj["rules"]["max_references"] == 55
 
 
 def test_split_intro():
