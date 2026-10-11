@@ -181,7 +181,7 @@ def _source_toc_entries(source_doc: Document) -> list[tuple[str, str]]:
     for t in paras[start + 1:]:
         m = re.match(r"^(\d+(?:\.\d+)*)\t(.+)$", t)
         if not m:
-            if out or t:
+            if t:  # Leerzeilen zwischen den Hauptabschnitten gehören noch dazu
                 break
             continue
         out.append((m.group(1), m.group(2)))
@@ -285,8 +285,12 @@ def copy_document_content_into_template(
         head.add_run("Inhalt").bold = True
         last.addnext(head._element)
         last = head._element
-        for num, text in toc_entries:
+        for k, (num, text) in enumerate(toc_entries):
             level = min(3, num.count(".") - min_depth + 1)
+            if level == 1 and k:
+                blank = template_doc.add_paragraph("")  # Leerzeile zwischen den Hauptabschnitten
+                last.addnext(blank._element)
+                last = blank._element
             tp = template_doc.add_paragraph(f"{num}\t{text}", style=toc_styles[level])
             # ohne eigene Formatvorlage für die Ebene: Einrückung je Ebene
             if level > 1 and (toc_styles[level] is None or toc_styles[level] == toc_styles[level - 1]):
@@ -294,27 +298,12 @@ def copy_document_content_into_template(
             last.addnext(tp._element)
             last = tp._element
 
-    # 4) Datum + Suchbegriffe VOR "Interessenkonflikte" einfügen (mit 2 Leerzeilen davor,
-    # zur Abgrenzung vom Inhaltsverzeichnis)
+    # 4) Leerzeilen VOR "Interessenkonflikte" (Abgrenzung vom Inhaltsverzeichnis). Suchdatum und
+    # Suchbegriffe stehen auf Wunsch der Autorin nicht mehr im Manuskript (2026-10-11).
     if ik_idx is not None:
         ik_element = template_paragraphs[ik_idx]._element
-        blank1_p = template_doc.add_paragraph("")
-        ik_element.addprevious(blank1_p._element)
-        blank2_p = template_doc.add_paragraph("")
-        ik_element.addprevious(blank2_p._element)
-        date_p = template_doc.add_paragraph(date.today().strftime("%d.%m.%Y"))
-        ik_element.addprevious(date_p._element)
-        if search_terms:
-            terms_style = "StandardTitle2" if "StandardTitle2" in template_style_names else None
-            terms_heading = template_doc.add_paragraph("Suchbegriffe", style=terms_style)
-            if terms_style is None and terms_heading.runs:
-                terms_heading.runs[0].bold = True
-            ik_element.addprevious(terms_heading._element)
-            for term in search_terms:
-                term_p = template_doc.add_paragraph(f"- {term}")
-                ik_element.addprevious(term_p._element)
-        spacer_p = template_doc.add_paragraph("")
-        ik_element.addprevious(spacer_p._element)
+        for _ in range(2):
+            ik_element.addprevious(template_doc.add_paragraph("")._element)
 
     # 5) Publikationsinhalt aus dem Quelldokument anhängen. Vor der ersten "Heading 2"
     # steht nur unsere eigene Standard-Titelseite (Titel, Datum, Suchbegriffe,
@@ -441,6 +430,7 @@ def copy_document_content_into_template(
             # Nummerierung – die Nummerierung liegt jetzt auf Ebene der Themensuche.
             new_p = template_doc.add_paragraph(style=title_style)
             new_p.paragraph_format.space_after = Pt(0)
+            new_p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY  # Blocksatz wie der Fließtext
             # Die Formatvorlage hat einen hängenden Einzug für das Muster "Nummer<TAB>Titel"
             # (Folgezeile rückt ein, damit sie nach dem Tab-Stopp der Nummer ausgerichtet
             # ist). Da der Titel hier KEINE Nummer+Tab mehr voranstehen hat, würde die

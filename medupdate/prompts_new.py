@@ -223,6 +223,35 @@ Publikationen (ID | bisheriges Thema | Titel | Fragestellung | Inhalt):
 {pubs_block}"""
 
 
+def headings_de_prompt(items: str) -> str:
+    return f"""Übersetze die folgenden Überschriften eines medizinischen Fortbildungshandbuchs \
+(Gastroenterologie/Endoskopie) ins Deutsche, wie sie in einem deutschen Fachbuch stehen würden: \
+fachsprachlich korrekt, knapp, gleiche Großschreibung wie im Deutschen üblich. Etablierte Abkürzungen \
+(z.B. GERD, EUS, ERCP, ESD) bleiben erhalten. Ist eine Überschrift schon deutsch, gib sie unverändert \
+zurück. "id" ist die Nummer vor dem Doppelpunkt.
+
+{items}"""
+
+
+def vary_fazit_prompt(items: str) -> str:
+    return f"""Ein deutsches Fortbildungsmanuskript enthält viele Studienbesprechungen. Ihr Absatz "Fazit für \
+die Praxis" beginnt oft mit demselben Satz (z.B. "Das Ergebnis ist neu."). Formuliere für jede \
+Besprechung NUR den ersten Satz des Fazits neu, damit sich die Formulierungen im Manuskript abwechseln \
+und konkret zur Studie passen, z.B. "Diese Studie zeigt erstmals, dass …", "Erstmals liegt … vor", "Die \
+Arbeit bestätigt …", "Neu ist vor allem …", "Die Daten stützen …".
+
+Regeln:
+- Die Aussage bleibt gleich (neu / bestätigend / nicht neu; Hedging bleibt). Keine neuen Fakten: Was neu \
+ist, darfst du nur aus dem mitgegebenen Fazit-Absatz übernehmen.
+- Der Satz muss nahtlos vor den übrigen Sätzen des Absatzes stehen können; wiederhole nichts, was im \
+nächsten Satz ohnehin folgt.
+- Höchstens ca. 25 Wörter, keine Ich-/Wir-Form, keine Klammerverweise hinzufügen oder entfernen.
+- Keine zwei Besprechungen mit demselben Satzanfang.
+- "id" wie vorgegeben, "sentence": der neue erste Satz.
+
+{items}"""
+
+
 def figure_pick_prompt(title: str, n_images: int) -> str:
     return f"""Die {n_images} Bilder stammen aus der Publikation „{title}“. Wähle das EINE Bild, das die \
 Hauptaussage der Studie am besten zeigt (z.B. Kaplan-Meier-Kurve oder Forest-Plot zum primären Endpunkt, \
@@ -297,6 +326,11 @@ Autoren:", "Kommentar:", "Fazit für die Praxis:") bleiben unverändert erhalten
 - Länge ungefähr gleich (±10 %).
 - Kurze, klare Sätze (möglichst höchstens 20–25 Wörter), keine Schachtelsätze, auch wenn die \
 Beispieltexte längere Sätze haben. Verschachtelte Sätze in zwei Sätze teilen.
+- Methodik und Statistik verständlich: Fachbegriffe (z.B. Impräzision, Entblindung, Lernkurveneffekt, \
+Baseline-Imbalance, Kovariatenadjustierung, explorativ) kurz im Halbsatz erklären oder in allgemein \
+verständliche Worte fassen; bei jeder Limitation sagen, was sie für das Ergebnis bedeutet (in welche \
+Richtung sie es verschieben würde); Stichwortketten nach einem Doppelpunkt in flüssige Sätze auflösen. \
+Dabei nichts weglassen und keine neue Bewertung hinzufügen.
 - Gib NUR den überarbeiteten Text aus.
 
 Text:

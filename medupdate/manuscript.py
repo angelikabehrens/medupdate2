@@ -38,7 +38,6 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     r = p.add_run(title or "Gesamtmanuskript")
     r.bold = True
     r.font.size = Pt(14)
-    doc.add_paragraph(date.today().strftime("%d.%m.%Y"))
     doc.add_paragraph("")
     toc_lines = []
     for b in blocks:
@@ -51,17 +50,13 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     if toc_lines:
         p = doc.add_paragraph()
         p.add_run("Inhaltsverzeichnis" if lang != "Englisch" else "Contents").bold = True
-        for level, num, text in toc_lines:
+        for k, (level, num, text) in enumerate(toc_lines):
+            if level == 1 and k:
+                doc.add_paragraph("")  # Leerzeile zwischen den Hauptabschnitten
             tp = doc.add_paragraph(f"{num}\t{text}")
             if level > 1:
                 tp.paragraph_format.left_indent = Pt(18 * (level - 1))
         doc.add_paragraph("")
-    p = doc.add_paragraph()
-    p.add_run("Suchbegriffe").bold = True
-    for b in blocks:
-        tp = doc.add_paragraph(f"- {b['topic']}")
-        tp.paragraph_format.left_indent = Pt(18)
-    doc.add_paragraph("")
     doc.add_paragraph("")
     p = doc.add_paragraph()
     p.add_run("Interessenskonflikte").bold = True
@@ -99,7 +94,7 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
             doc.add_paragraph("")
 
         for pub in b["pubs"]:
-            doc.add_heading(pub["title"], level=2)
+            doc.add_heading(pub["title"], level=2).alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             if pub.get("recs"):  # gemeinsame Würdigung: alle Publikationen in der Zitierzeile
                 doc.add_paragraph("; ".join(short_citation(r, [i]) for i, r in enumerate(pub["recs"], start=1)))
             else:

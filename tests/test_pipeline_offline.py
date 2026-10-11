@@ -426,6 +426,12 @@ def test_outline_levels():
                 ("Toc2", "8.2.2\tUnter 8.2.8"), ("Toc3", "8.2.2.1\tEinzeln")]
     assert toc[:8] == expected, toc
     assert toc[8:] == expected, toc
+    texts = [p.text for p in out.paragraphs]
+    i = texts.index("8.1.1\tDirekt")
+    assert texts[i + 1] == "" and texts[i + 2] == "8.2\tAbschnitt 8.2", "Leerzeile zwischen Hauptabschnitten"
+    assert "Suchbegriffe" not in texts and not any(re.fullmatch(r"\d\d\.\d\d\.\d{4}", t) for t in texts)
+    raw_texts = [p.text for p in raw.paragraphs]
+    assert "Suchbegriffe" not in raw_texts and raw_texts[raw_texts.index("8.1.1\tDirekt") + 1] == ""
 
 
 def test_sota_trailing_note():
@@ -580,7 +586,31 @@ def test_direct_upload():
     assert forced["ok"] and proj["pubs"]["1"]["upload_checked"] == "von Ihnen bestätigt"
 
 
+def test_fazit_and_headings():
+    class L:
+        def json(self, prompt, schema, **kw):
+            if "Überschriften" in prompt:
+                ids = re.findall(r"^(\d+): (.+)$", prompt, re.M)
+                return {"items": [{"id": i, "de": {"Esophagus": "Ösophagus", "Stomach": "Magen"}.get(x, x)}
+                                  for i, x in ids]}
+            ids = re.findall(r"^id (\d+):", prompt, re.M)
+            return {"items": [{"id": i, "sentence": f"Variante {i} zeigt erstmals etwas."} for i in ids]}
+    proj = {"toc": {"chapter_title": "Endoscopy"}, "pubs": {
+        "a": {"short_de": "Studie: x\nFazit für die Praxis: Das Ergebnis ist neu. Es ist valide (1)."},
+        "b": {"styled_de": "Kommentar: y\nFazit für die Praxis: Das Ergebnis ist neu. Praxis ändert sich nicht."},
+        "c": {"short_de": "Fazit für die Praxis: Die Arbeit bestätigt frühere Daten."}},
+        "topics": {"T": {"title": "Stomach", "section_title": "Esophagus"}}}
+    n = pipeline.vary_fazit_openings(L(), proj, [("a", "T"), ("b", "T"), ("c", "T")], lambda m: None)
+    assert n == 2
+    assert proj["pubs"]["a"]["short_de"].endswith("Fazit für die Praxis: Variante 0 zeigt erstmals etwas. Es ist valide (1).")
+    assert "Variante 1" in proj["pubs"]["b"]["styled_de"] and "bestätigt" in proj["pubs"]["c"]["short_de"]
+    assert pipeline.vary_fazit_openings(L(), proj, [("a", "T"), ("b", "T")], lambda m: None) == 0
+    de = pipeline.headings_de(L(), proj, ["T"])
+    assert de["Esophagus"] == "Ösophagus" and de["Stomach"] == "Magen"
+
+
 if __name__ == "__main__":
+    test_fazit_and_headings()
     test_direct_upload()
     test_enforce_pub_limit()
     test_reassign_topics()

@@ -527,8 +527,8 @@ if any("recommended" in t for t in proj["topics"].values()):
         n_old = sum(1 for d in proj.get("pubs", {}).values()
                     if d.get("short_en") and d.get("short_v", 1) < pipeline.SHORT_VERSION)
         opt_reshorten = st.checkbox(
-            f"Bereits gekürzte Würdigungen neu kürzen (kürzere Sätze, weniger Statistik; {n_old} betroffen, "
-            f"ca. {0.2 * n_old:.0f} USD)", value=False, disabled=not n_old,
+            f"Bereits gekürzte Würdigungen neu kürzen (verständlichere Methodik/Statistik, abwechslungsreiches "
+            f"Fazit, kürzere Sätze; {n_old} betroffen, ca. {0.3 * n_old:.0f} USD)", value=False, disabled=not n_old,
             help="Die kritischen Würdigungen selbst werden nicht neu erstellt, nur Kürzung, Übersetzung und Stil.")
         go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen", disabled=not ready, type="primary")
 

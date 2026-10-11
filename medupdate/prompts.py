@@ -701,6 +701,26 @@ nur, wenn kein Konfidenzintervall vorliegt oder er für die Aussage entscheidend
 Endpunkte, Subgruppen und Sicherheitsdaten nur mit der wichtigsten Zahl oder in Worten \
 (z.B. "ohne signifikanten Unterschied", "etwa halbiert"), ohne vollständige Statistik.
 - Höchstens zwei Zahlenangaben pro Satz.
+
+METHODIK VERSTÄNDLICH ERKLÄREN – die Bewertung der Studienqualität bleibt vollständig, wird aber für \
+klinisch tätige Leserinnen und Leser nachvollziehbar:
+- Sage bei jeder wichtigen Stärke oder Limitation in einfachen Worten, was sie für das Ergebnis \
+bedeutet. Beispiel: statt "Zentrale Limitation ist die Impräzision der Schätzung" lieber "Die Studie \
+war zu klein, um einen moderaten Nutzen sicher nachzuweisen oder auszuschließen".
+- Fachbegriffe wie Impräzision, Entblindung, Lernkurveneffekt, Baseline-Imbalance, \
+Kovariatenadjustierung, explorativ, Sham-Response nur mit kurzer Erklärung im Halbsatz verwenden, sonst \
+durch allgemein verständliche Worte ersetzen.
+- Keine Stichwortketten nach einem Doppelpunkt ("hoch: verdeckte Randomisierung, Verblindung, …"); \
+Stärken in einem flüssigen Satz zusammenfassen.
+- Mögliche Verzerrungen mit ihrer Richtung erklären: Würden sie das Ergebnis eher zugunsten oder \
+zuungunsten der Intervention verschieben, und stärkt oder schwächt das die Aussage? Gleichgerichtete \
+Punkte in einem Satz bündeln, statt sie einzeln aufzuzählen.
+- Am Ende der Validitätsbewertung ein klarer Satz, wie belastbar das Ergebnis insgesamt ist.
+
+FAZIT ABWECHSLUNGSREICH: Beginne das Fazit für die Praxis nicht mit einer Standardformel wie "Das \
+Ergebnis ist neu." bzw. "The result is new.", sondern konkret zur Studie, z.B. "Diese Studie zeigt \
+erstmals, dass …", "Erstmals liegt ein randomisierter Vergleich zu … vor", "Die Arbeit bestätigt …", \
+"Neu ist vor allem …" – inhaltlich unverändert (neu / bestätigend / hypothesengenerierend).
 - Wesentliche Inhalte bleiben erhalten: Was für die Leitfrage, die Validität oder die Praxis zählt, \
 wird nicht gestrichen, sondern nur einfacher formuliert. Zahlen, die du übernimmst, bleiben exakt. Vermeide die Ich-/Wir-Form der Originalautoren (siehe getrennte \
 Stilvorgabe, sofern bereits angewendet).

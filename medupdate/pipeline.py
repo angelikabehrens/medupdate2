@@ -24,7 +24,7 @@ from .citations import (
     reconcile_local_citations,
     strip_appraisal_preamble,
 )
-from .config import MAX_PUBS_PER_TOPIC, MODEL_MAIN, PARALLEL_WORKERS
+from .config import MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
 from .files import extract_images_from_pdf, extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
@@ -35,8 +35,9 @@ from .references import make_formatter
 
 
 
-# Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10)
-SHORT_VERSION = 2
+# Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
+# erklärt, abwechslungsreiches Fazit (2026-10-11)
+SHORT_VERSION = 3
 
 def new_project() -> dict:
     return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
@@ -967,6 +968,14 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             else:
                 proj["pubs"][p]["styled_de"], proj["pubs"][p]["style_ok"] = res
 
+    # 7a. Fazit-Anfänge abwechslungsreich (nicht überall "Das Ergebnis ist neu.")
+    try:
+        vary_fazit_openings(llm, proj, ready, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Fazit-Formulierungen", ex)
+
     # 7b. Inhaltliche Rückbezüge auf frühere eigene Manuskripte (höchstens OWN_REFS_MAX, nur wo sinnvoll)
     if proj.get("style") and options.get("own_refs", True):
         key = sorted(p for p, _ in ready)
@@ -1005,13 +1014,25 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     template = (proj.get("template") or {}).get("bytes")
     formatter = make_formatter(llm, rules, proj["records"], email)
     gliederung = outline(proj, topic_ids)
+    try:
+        de = headings_de(llm, proj, topic_ids)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Übersetzung der Überschriften", ex)
+        de = {}
     for lang in ("Deutsch", "Englisch"):
         blocks = []
+        tr = (lambda x: de.get(x, x)) if lang == "Deutsch" else (lambda x: x)
         for tid in topic_ids:
             t = proj["topics"][tid]
             sota_block = (t.get("sota_de" if lang == "Deutsch" else "sota_en")
                           if tid in sota_ids and options.get("sota", True) else None)
-            block = {"topic": t["title"], "sota": sota_block, "pubs": [], **gliederung.get(tid, {})}
+            g = dict(gliederung.get(tid, {}))
+            for k in ("section", "subsection"):
+                if g.get(k):
+                    g[k] = (g[k][0], tr(g[k][1]))
+            block = {"topic": tr(t["title"]), "sota": sota_block, "pubs": [], **g}
             for p, tt in ready:
                 if tt != tid:
                     continue
@@ -1037,7 +1058,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                                       "lines": [l for l in text.split("\n") if l.strip()], "literature": lit,
                                       "figure": figure})
             blocks.append(block)
-        raw = build_docx(title, blocks, lang)
+        raw = build_docx(tr(title), blocks, lang)
         key = "DE" if lang == "Deutsch" else "EN"
         try:
             befunde, final = run_formal_check(raw, llm if lang == "Deutsch" else None, template, rules, formatter)
@@ -1116,6 +1137,85 @@ def export_project(proj: dict) -> bytes:
     slim = dict(proj)
     slim["pubs"] = {p: {k: v for k, v in d.items() if k not in ("pdf", "images")} for p, d in proj["pubs"].items()}
     return gzip.compress(json.dumps(slim, default=_enc, ensure_ascii=False).encode("utf-8"), 6)
+
+
+FAZIT_SCHEMA = obj({"items": arr(obj({"id": STR, "sentence": STR}))})
+_FAZIT_RE = re.compile(r"^(Fazit für die Praxis:\s*)(.+?[.!?])(\s+|$)(.*)$", re.S)
+
+
+def _de_text_key(d: dict) -> str:
+    return "styled_de" if d.get("styled_de") else "short_de"
+
+
+def vary_fazit_openings(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> int:
+    """Fangen mehrere Fazits gleich an (z.B. "Das Ergebnis ist neu."), wird nur deren erster Satz in einem
+    günstigen KI-Aufruf abwechslungsreich und konkret umformuliert. Rückgabe: Anzahl geänderter Fazits."""
+    found = {}
+    for p, _ in ready:
+        d = proj["pubs"][p]
+        key = _de_text_key(d)
+        lines = (d.get(key) or "").split("\n")
+        for i, line in enumerate(lines):
+            m = _FAZIT_RE.match(line.strip())
+            if m:
+                found[p] = (key, i, m)
+                break
+
+    def start(m):
+        return " ".join(re.findall(r"\w+", m.group(2).lower())[:3])
+
+    counts: dict[str, int] = {}
+    for _, _, m in found.values():
+        counts[start(m)] = counts.get(start(m), 0) + 1
+    dup = [p for p, (_, _, m) in found.items() if counts[start(m)] > 1]
+    if len(dup) < 2:
+        return 0
+    log(f"Fazit-Formulierungen werden abwechslungsreicher gestaltet ({len(dup)})…")
+    items = "\n\n".join(f"id {k}: {found[p][2].group(2)} {found[p][2].group(4)}".strip() for k, p in enumerate(dup))
+    res = llm.json(P.vary_fazit_prompt(items), FAZIT_SCHEMA, model=MODEL_FAST, max_tokens=6000, effort="medium")
+    changed = 0
+    for it in res.get("items", []):
+        try:
+            p = dup[int(re.sub(r"\D", "", it.get("id", "")) or -1)]
+        except (ValueError, IndexError):
+            continue
+        sent = (it.get("sentence") or "").strip()
+        if not sent:
+            continue
+        key, i, m = found[p]
+        d = proj["pubs"][p]
+        lines = d[key].split("\n")
+        lines[i] = (m.group(1) + sent + (" " + m.group(4) if m.group(4) else "")).rstrip()
+        d[key] = "\n".join(lines)
+        changed += 1
+    return changed
+
+
+HEADINGS_SCHEMA = obj({"items": arr(obj({"id": STR, "de": STR}))})
+
+
+def headings_de(llm: LLM, proj: dict, topic_ids: list[str]) -> dict[str, str]:
+    """Deutsche Fassung aller Überschriften (Kapitel, Abschnitte, Unterabschnitte, Themen) für das
+    deutsche Manuskript, auch wenn das Inhaltsverzeichnis englisch hochgeladen wurde. Ein günstiger
+    KI-Aufruf; bereits Übersetztes wird wiederverwendet."""
+    cache = proj.setdefault("headings_de", {})
+    srcs = [(proj.get("toc") or {}).get("chapter_title") or ""]
+    for tid in topic_ids:
+        t = proj["topics"][tid]
+        srcs += [t.get("section_title") or "", t.get("subsection_title") or "", t["title"]]
+    missing = [x for x in dict.fromkeys(srcs) if x.strip() and x != "Varia" and x not in cache]
+    if missing:
+        items = "\n".join(f"{i}: {x}" for i, x in enumerate(missing))
+        res = llm.json(P.headings_de_prompt(items), HEADINGS_SCHEMA, model=MODEL_FAST, max_tokens=4000,
+                       effort="low")
+        for it in res.get("items", []):
+            try:
+                src = missing[int(it.get("id", ""))]
+            except (ValueError, IndexError):
+                continue
+            if it.get("de", "").strip():
+                cache[src] = it["de"].strip()
+    return cache
 
 
 def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
