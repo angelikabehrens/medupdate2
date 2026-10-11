@@ -69,6 +69,7 @@ class LLM:
         self.budget_usd = budget_usd  # 0 = kein Limit
         self.cost_usd = 0.0
         self.web_searches = 0
+        self.stop_requested = False
         self._lock = threading.Lock()
         self.on_wait = on_wait or (lambda msg: None)
 
@@ -108,6 +109,9 @@ class LLM:
         output_config: dict = {"effort": effort}
         if output_format:
             output_config["format"] = output_format
+        if self.stop_requested:
+            raise BudgetExceeded("Der Lauf wurde auf Ihren Wunsch angehalten. Alles bis hierhin Erledigte bleibt "
+                                 "erhalten; ein erneuter Start setzt dort fort.")
         if self.budget_usd and self.cost_usd >= self.budget_usd:
             raise BudgetExceeded(
                 f"Das eingestellte Kostenlimit von {self.budget_usd:.0f} USD für diesen Lauf ist erreicht "

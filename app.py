@@ -10,7 +10,9 @@ Zwei Schritte für die Nutzerin bzw. den Nutzer:
 
 import calendar
 import hmac
+import threading
 import time
+import uuid
 from datetime import date
 
 import streamlit as st
@@ -46,9 +48,17 @@ if _APP_PASSWORD and not st.session_state.get("_access_ok"):
             st.error("Der Zugangscode ist nicht korrekt.")
     st.stop()
 
+@st.cache_resource
+def _jobs() -> dict:
+    """Hintergrund-Läufe aller Sitzungen dieser App ({Projekt-ID: Lauf}); überlebt einen Seiten-Neuladen."""
+    return {}
+
+
 if "proj" not in st.session_state:
     st.session_state["proj"] = pipeline.new_project()
 proj = st.session_state["proj"]
+proj.setdefault("id", uuid.uuid4().hex[:12])
+_running = _jobs().get(proj["id"], {}).get("state") == "running"
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -68,17 +78,26 @@ with st.sidebar:
     st.header("💾 Zwischenstand")
     st.caption("Die App speichert nichts auf dem Server. Den Zwischenstand hier herunterladen und später "
                "wieder laden, um weiterzuarbeiten.")
-    if st.button("💾 Zwischenstand vorbereiten"):
+    _others = {pid: j for pid, j in _jobs().items() if pid != proj["id"] and not j.get("taken")}
+    for _pid, _j in _others.items():
+        _state = {"running": "läuft", "done": "fertig", "error": "abgebrochen"}[_j["state"]]
+        if st.button(f"▶️ Lauf übernehmen: {_j['label']} ({_state})", key=f"take_{_pid}"):
+            _j["taken"] = True
+            st.session_state["proj"] = _j["proj"]
+            st.rerun()
+    if _running:
+        st.caption("Während eines Laufs kann der Zwischenstand nicht gespeichert werden.")
+    elif st.button("💾 Zwischenstand vorbereiten"):
         st.session_state["_export"] = pipeline.export_project(proj)
     if st.session_state.get("_export"):
         st.download_button("⬇️ Zwischenstand herunterladen", data=st.session_state["_export"],
                            file_name=f"medupdate2_zwischenstand_{date.today().isoformat()}.json.gz",
                            mime="application/gzip", on_click=lambda: st.session_state.pop("_export", None))
     _load = st.file_uploader("Zwischenstand laden", type=["gz", "json"], key="load_state")
-    if _load is not None and st.button("Laden"):
+    if _load is not None and not _running and st.button("Laden"):
         st.session_state["proj"] = pipeline.import_project(_load.read())
         st.rerun()
-    if st.button("🗑️ Neues Projekt beginnen"):
+    if not _running and st.button("🗑️ Neues Projekt beginnen"):
         st.session_state["proj"] = pipeline.new_project()
         st.rerun()
 
@@ -107,33 +126,74 @@ def get_llm(budget_usd: float = 0.0) -> LLM | None:
 
 
 def run_with_status(label: str, fn, llm: LLM | None = None) -> None:
-    before = llm.cost_usd if llm else 0.0
-    with st.status(label, expanded=True) as status:
-        line = st.empty()
-        started = time.time()
+    """Startet den Lauf im Hintergrund. Er läuft auf dem Server weiter, auch wenn das Browserfenster
+    geschlossen wird, der Rechner in den Ruhezustand geht oder die Verbindung kurz abreißt; die Seite zeigt
+    nur den Fortschritt an. (Ein Neustart der App selbst beendet ihn; Fertiges bleibt im Zwischenstand.)"""
+    job = {"label": label, "proj": proj, "log": [], "state": "running", "error": "", "started": time.time(),
+           "llm": llm, "before": llm.cost_usd if llm else 0.0, "spent": 0.0}
 
-        def log(msg: str) -> None:
-            line.write(f"{msg} ({int(time.time() - started)} Sek.)")
+    def log(msg: str) -> None:
+        job["log"] = (job["log"] + [f"{msg} ({int(time.time() - job['started'])} Sek.)"])[-8:]
 
+    def target() -> None:
         try:
             fn(log)
-            status.update(label=f"{label} – fertig", state="complete", expanded=False)
-        except Exception as ex:
-            status.update(label=f"{label} – abgebrochen", state="error")
-            st.error(f"Abgebrochen: {ex}\n\nEin erneuter Start setzt an derselben Stelle fort; bereits "
-                     "Erledigtes wird nicht noch einmal bezahlt. Zur Sicherheit den Zwischenstand in der "
-                     "Seitenleiste herunterladen.")
+            job["state"] = "done"
+        except Exception as ex:  # noqa: BLE001 – jede Ursache wird angezeigt und im Zwischenstand vermerkt
+            job["state"], job["error"] = "error", f"{type(ex).__name__}: {ex}"
+            proj.setdefault("errors", []).append({"where": f"Abbruch: {label}", "error": job["error"]})
         finally:
             if llm:
-                spent = llm.cost_usd - before
-                proj["cost_usd"] = proj.get("cost_usd", 0.0) + spent
-                st.caption(f"KI-Kosten dieses Laufs ≈ {spent:.2f} USD ({llm.web_searches} Websuchen); "
-                           f"Projekt bisher ≈ {proj['cost_usd']:.2f} USD (Listenpreise, Schätzung).")
+                job["spent"] = llm.cost_usd - job["before"]
+                proj["cost_usd"] = proj.get("cost_usd", 0.0) + job["spent"]
+            job["ended"] = time.time()
+
+    _jobs()[proj["id"]] = job
+    threading.Thread(target=target, daemon=True, name=f"lauf-{proj['id']}").start()
+    st.rerun()
+
+
+def show_job() -> None:
+    """Laufender Hintergrund-Lauf: nur den Fortschritt zeigen (alle 5 Sek. aktualisiert), sonst nichts
+    bedienen, damit Eingaben den Lauf nicht stören. Ein beendeter Lauf zeigt einmal sein Ergebnis."""
+    job = _jobs().get(proj["id"])
+    if not job:
+        return
+    if job["state"] == "running":
+        @st.fragment(run_every=5)
+        def progress():
+            if job["state"] != "running":
+                st.rerun()
+            llm = job.get("llm")
+            spent = (llm.cost_usd - job["before"]) if llm else 0.0
+            with st.status(f"{job['label']} … läuft seit {int((time.time() - job['started']) / 60)} Min.",
+                           expanded=True):
+                for line in job["log"][-5:]:
+                    st.write(line)
+                st.caption(f"KI-Kosten dieses Laufs bisher ≈ {spent:.2f} USD. Sie können das Fenster schließen; "
+                           "der Lauf geht auf dem Server weiter. Später diese Seite öffnen und den Lauf in der "
+                           "Seitenleiste übernehmen.")
+            if llm and st.button("⏹ Lauf anhalten (Fertiges bleibt erhalten)"):
+                llm.stop_requested = True  # der nächste KI-Aufruf hält sauber an
+                st.toast("Wird nach dem laufenden Schritt angehalten.")
+        progress()
+        st.stop()
+    if not job.get("shown"):
+        job["shown"] = True
+        if job["state"] == "done":
+            st.success(f"{job['label']} – fertig.")
+        else:
+            st.error(f"{job['label']} – abgebrochen: {job['error']}\n\nEin erneuter Start setzt an derselben "
+                     "Stelle fort; bereits Erledigtes wird nicht noch einmal bezahlt.")
+        if job.get("llm"):
+            st.caption(f"KI-Kosten dieses Laufs ≈ {job['spent']:.2f} USD ({job['llm'].web_searches} Websuchen); "
+                       f"Projekt bisher ≈ {proj.get('cost_usd', 0):.2f} USD (Listenpreise, Schätzung).")
 
 
 # ======================================================================
 # SCHRITT 1
 # ======================================================================
+show_job()
 st.markdown("<div style='font-size:2.2rem; font-weight:700;'>1. Thema und Vorgaben</div>", unsafe_allow_html=True)
 
 with st.form("step1"):

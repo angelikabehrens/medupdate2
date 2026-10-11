@@ -10,6 +10,7 @@ import json
 import re
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
@@ -38,7 +39,7 @@ from .references import make_formatter
 SHORT_VERSION = 2
 
 def new_project() -> dict:
-    return {"version": 1, "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
+    return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
             "template": None, "topics": {}, "records": {}, "pubs": {}, "uploads": {}, "style": {},
             "guideline_uploads": {}, "outputs": {}, "errors": []}
 

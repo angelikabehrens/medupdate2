@@ -67,7 +67,9 @@ def generate_appraisal(llm: LLM, entry: dict, docs: list[tuple[str, str]], sprac
     fulltext_block = (f"\nVolltext (Auszug, automatisch geladen oder hochgeladen):\n{entry['full_text']}\n"
                       if entry.get("full_text") else "")
     prompt = M.appraisal_prompt(entry, sprache_kw, fulltext_block, background_block(docs), max_websuchen=WEB_SEARCHES)
-    text = llm.text(prompt, model=MODEL_MAIN, web_search=WEB_SEARCHES, max_tokens=32000, effort="high")
+    # Großzügiges Limit: abgeschnittene Würdigungen sind verlorenes Geld (Denken zählt mit); berechnet wird nur
+    # die tatsächliche Länge
+    text = llm.text(prompt, model=MODEL_MAIN, web_search=WEB_SEARCHES, max_tokens=64000, effort="high")
     text = fix_citation_consistency(llm, text, sprache_kw)
     return renumber_and_prune_citations(text)
 
