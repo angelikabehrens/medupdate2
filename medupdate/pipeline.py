@@ -162,6 +162,7 @@ def tolerance_text(proj: dict) -> str:
 
 def run_recommendations(llm: LLM, proj: dict, log) -> None:
     apply_manual_limits(proj)
+    proj["check_ok"] = False  # neue Auswahl: Themenzuordnung in Schritt 2 erneut prüfen
     chapter = (proj["toc"] or {}).get("chapter_title", "")
     rules = proj.get("rules") or {}
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
@@ -590,6 +591,18 @@ def enforce_pub_limit(proj: dict, log) -> list[dict]:
     return dropped
 
 
+def check_assignment(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
+    """Pflichtschritt vor dem Schreiben: Uploads zuordnen, Themenzuordnung prüfen, hochgeladene Arbeiten
+    bewerten, Publikationszahl und Seitenumfang einhalten. Erst danach wird „Manuskript erstellen“ frei."""
+    proj["check_ok"] = False
+    if uploads:
+        match_uploads(llm, proj, uploads, log)
+    reassign_topics(llm, proj, log)
+    rate_unranked(llm, proj, log)
+    enforce_pub_limit(proj, log)
+    proj["check_ok"] = True
+
+
 def set_manual_topic(proj: dict, p: str, tid: str) -> None:
     """Zuordnung durch die Nutzerin; die KI-Prüfung ändert sie danach nicht mehr."""
     proj.setdefault("topic_manual", {})[p] = tid
@@ -743,13 +756,12 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     apply_manual_limits(proj)
     ensure_varia(proj)
-    if options.get("reassign", True):
-        try:
-            reassign_topics(llm, proj, log)
-        except AccountError:
-            raise
-        except Exception as ex:
-            _err(proj, "Themenzuordnung prüfen", ex)
+    try:
+        reassign_topics(llm, proj, log)  # ist nach check_assignment bereits erledigt (Cache)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Themenzuordnung prüfen", ex)
     rate_unranked(llm, proj, log)
     enforce_pub_limit(proj, log)
     pubs = _pub_list(proj)

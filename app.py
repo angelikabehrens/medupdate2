@@ -20,6 +20,9 @@ from medupdate.config import secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
 
+# Kostenlimit für den Pflichtschritt „Hochladen und Themenzuordnung prüfen“ (wenige KI-Aufrufe)
+CHECK_BUDGET_USD = 5.0
+
 st.set_page_config(page_title="MyLuo Pro", layout="wide")
 st.markdown(
     "<div style='font-size:3rem; font-weight:700; line-height:1.2;'>MyLuo Pro</div>"
@@ -347,48 +350,20 @@ if any("recommended" in t for t in proj["topics"].values()):
             st.markdown(f"- {g.get('title', '')} ({g.get('society', '')}, {g.get('year', '')}) — Thema: "
                         f"{proj['topics'][tid]['title']}")
 
-    with st.form("step2"):
+    # 2a. Hochladen und Themenzuordnung prüfen – immer vor dem Schreiben
+    with st.form("step2_upload"):
         pub_files = st.file_uploader("Originalpublikationen und weitere Publikationen (PDF)", type=["pdf"],
                                      accept_multiple_files=True)
         style_files = st.file_uploader("Eigene Manuskripte der letzten 3 Jahre (für den Schreibstil)",
                                        type=["docx", "pdf"], accept_multiple_files=True)
         gl_files = st.file_uploader("Leitlinien (PDF)", type=["pdf"], accept_multiple_files=True)
-        o1, o2, o3 = st.columns(3)
-        opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
-        opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
-        opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
-        opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (2–3 je Gruppe)",
-                                value=True, help="Wie Schritt 4B in MyLuo. Die Einzelwürdigungen werden zu einer "
-                                                 "vergleichenden Würdigung zusammengeführt.")
-        opt_own = st.checkbox("Inhaltliche Rückbezüge auf meine früheren Manuskripte (höchstens 2, nur wo sinnvoll)",
-                              value=True, help="Nur wenn eigene Manuskripte hochgeladen sind. Ein zusätzlicher KI-Aufruf.")
-        b1, b2 = st.columns(2)
-        opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
-                                "vollständigen Lauf)", value=not out_any(proj))
-        trial_topics = list(dict.fromkeys(t for _, t in pipeline._pub_list(proj)))
-        opt_trial_topic = b1.selectbox(
-            "Thema für den Probelauf", trial_topics,
-            format_func=lambda t: proj["topics"][t].get("number", "") + " " + proj["topics"][t]["title"],
-        ) if trial_topics else None
-        opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
-                                     help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
-                                          "ein erneuter Start setzt dort fort.")
-        n_old = sum(1 for d in proj.get("pubs", {}).values()
-                    if d.get("short_en") and d.get("short_v", 1) < pipeline.SHORT_VERSION)
-        opt_reshorten = st.checkbox(
-            f"Bereits gekürzte Würdigungen neu kürzen (kürzere Sätze, weniger Statistik; {n_old} betroffen, "
-            f"ca. {0.2 * n_old:.0f} USD)", value=False, disabled=not n_old,
-            help="Die kritischen Würdigungen selbst werden nicht neu erstellt, nur Kürzung, Übersetzung und Stil.")
-        opt_reassign = st.checkbox(
-            "Themenzuordnung aller Publikationen durch die KI prüfen (Schwerpunkt der Arbeit; gleiche Fragestellung "
-            "→ gleiches Thema)", value=True, help="Ein KI-Aufruf für alle Publikationen zusammen, ca. 0,2–0,5 USD. "
-                                                   "Ihre eigenen Änderungen in der Übersicht bleiben erhalten.")
-        c1, c2 = st.columns(2)
-        go_check = c1.form_submit_button("🧩 Hochladen und Themenzuordnung prüfen")
-        go2 = c2.form_submit_button("✍️ Manuskript automatisch erstellen")
+        st.caption("Danach prüft die KI die Themenzuordnung aller Publikationen (Schwerpunkt der Arbeit; gleiche "
+                   "Fragestellung → gleiches Thema, gemeinsame Würdigung) und hält Publikationszahl und Seitenumfang "
+                   "ein. Erst dann kann das Manuskript erstellt werden. Kosten ca. 0,2–1 USD.")
+        go_check = st.form_submit_button("🧩 Hochladen und Themenzuordnung prüfen", type="primary")
 
-    if go_check or go2:
-        llm = get_llm(float(opt_budget))
+    if go_check:
+        llm = get_llm(CHECK_BUDGET_USD)
         if llm:
             uploads = {f.name: f.read() for f in (pub_files or [])}
             for f in style_files or []:
@@ -398,25 +373,8 @@ if any("recommended" in t for t in proj["topics"].values()):
                 text = extract_text(f.name, f.read())
                 tid = next((t for title, t in topics_for_gl.items() if title and title[:30] in text.lower()[:5000]), "")
                 proj["guideline_uploads"][f.name] = {"topic_id": tid, "text": text}
-
-            def check(log):
-                if uploads:
-                    pipeline.match_uploads(llm, proj, uploads, log)
-                pipeline.reassign_topics(llm, proj, log)
-                pipeline.rate_unranked(llm, proj, log)
-                pipeline.enforce_pub_limit(proj, log)
-
-            def step2(log):
-                if uploads:
-                    pipeline.match_uploads(llm, proj, uploads, log)
-                pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
-                                                         "trial": opt_trial, "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
-                                                         "reshorten": opt_reshorten, "reassign": opt_reassign})
-
-            if go_check:
-                run_with_status("Themenzuordnung wird geprüft", check, llm)
-            else:
-                run_with_status("Manuskript wird erstellt", step2, llm)
+            run_with_status("Themenzuordnung wird geprüft",
+                            lambda log: pipeline.check_assignment(llm, proj, uploads, log), llm)
 
     if proj.get("reassigned_for"):
         overview = pipeline.assignment_overview(proj)
@@ -459,6 +417,48 @@ if any("recommended" in t for t in proj["topics"].values()):
                     else:
                         pipeline.set_manual_topic(proj, pick, dst)
                         st.rerun()
+
+    # 2b. Manuskript erstellen – erst nach der Prüfung der Themenzuordnung
+    ready = bool(proj.get("check_ok"))
+    if not ready:
+        st.info("Bitte zuerst „🧩 Hochladen und Themenzuordnung prüfen“ ausführen (auch wenn keine PDFs "
+                "hochzuladen sind). Danach wird „Manuskript erstellen“ freigegeben.")
+    with st.form("step2_write"):
+        o1, o2, o3 = st.columns(3)
+        opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
+        opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
+        opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
+        opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (2–3 je Gruppe)",
+                                value=True, help="Wie Schritt 4B in MyLuo. Die Einzelwürdigungen werden zu einer "
+                                                 "vergleichenden Würdigung zusammengeführt.")
+        opt_own = st.checkbox("Inhaltliche Rückbezüge auf meine früheren Manuskripte (höchstens 2, nur wo sinnvoll)",
+                              value=True, help="Nur wenn eigene Manuskripte hochgeladen sind. Ein zusätzlicher KI-Aufruf.")
+        b1, b2 = st.columns(2)
+        opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
+                                "vollständigen Lauf)", value=not out_any(proj))
+        trial_topics = list(dict.fromkeys(t for _, t in pipeline._pub_list(proj)))
+        opt_trial_topic = b1.selectbox(
+            "Thema für den Probelauf", trial_topics,
+            format_func=lambda t: proj["topics"][t].get("number", "") + " " + proj["topics"][t]["title"],
+        ) if trial_topics else None
+        opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
+                                     help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
+                                          "ein erneuter Start setzt dort fort.")
+        n_old = sum(1 for d in proj.get("pubs", {}).values()
+                    if d.get("short_en") and d.get("short_v", 1) < pipeline.SHORT_VERSION)
+        opt_reshorten = st.checkbox(
+            f"Bereits gekürzte Würdigungen neu kürzen (kürzere Sätze, weniger Statistik; {n_old} betroffen, "
+            f"ca. {0.2 * n_old:.0f} USD)", value=False, disabled=not n_old,
+            help="Die kritischen Würdigungen selbst werden nicht neu erstellt, nur Kürzung, Übersetzung und Stil.")
+        go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen", disabled=not ready, type="primary")
+
+    if go2 and ready:
+        llm = get_llm(float(opt_budget))
+        if llm:
+            run_with_status("Manuskript wird erstellt", lambda log: pipeline.run_manuscript(llm, proj, log, {
+                "figures": opt_fig, "sota": opt_sota, "style": opt_style, "trial": opt_trial,
+                "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
+                "reshorten": opt_reshorten}), llm)
 
     out = proj.get("outputs") or {}
     partial = pipeline.partial_docx(proj) if any(d.get("body_en") for d in proj["pubs"].values()) else None
