@@ -143,6 +143,16 @@ with st.form("step1"):
         template_file = st.file_uploader("Manuskript-Formatvorlage", type=["docx"])
     with c3:
         guide_file = st.file_uploader("Hinweise für Autoren", type=["docx", "pdf", "txt"])
+    _lim = proj.get("manual_limits") or {}
+    l1, l2 = st.columns(2)
+    lim_pages = l1.number_input("Anzahl Manuskriptseiten (ohne Inhaltsverzeichnis)", min_value=0, max_value=500,
+                                value=int(_lim.get("pages") or 0), step=1,
+                                help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
+                                     f"{pipeline.tolerance_text(proj)}.")
+    lim_refs = l2.number_input("Anzahl der Literaturstellen", min_value=0, max_value=1000,
+                               value=int(_lim.get("references") or 0), step=1,
+                               help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
+                                     f"{pipeline.tolerance_text(proj)}.")
     b_win, b_go = st.columns([1, 3])
     with b_win.popover("📅 Suchzeitraum"):
         _months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
@@ -176,6 +186,7 @@ if go1:
         st.warning("Bitte das Inhaltsverzeichnis hochladen.")
     elif llm:
         proj["email"] = email.strip()
+        proj["manual_limits"] = {"pages": int(lim_pages), "references": int(lim_refs)}
         if win_manual:
             _last = calendar.monthrange(int(bis_y), int(bis_m))[1]
             proj["search_window"] = [date(int(von_y), int(von_m), 1).isoformat(),
@@ -199,7 +210,11 @@ if proj.get("toc"):
     rules = proj.get("rules") or {}
     if rules:
         with st.expander("📋 Erkannte Vorgaben aus den Hinweisen für Autoren"):
-            st.json({k: v for k, v in rules.items() if v})
+            st.json({k: v for k, v in rules.items() if v and not k.startswith("_")})
+    if (proj.get("manual_limits") or {}).get("pages") or (proj.get("manual_limits") or {}).get("references"):
+        st.caption(f"Manuelle Vorgaben (Überschreitung um höchstens {pipeline.tolerance_text(proj)}): "
+                   f"Obergrenze {rules.get('max_pages', 0) - 1 if rules.get('max_pages') else '–'} Seiten ohne "
+                   f"Inhaltsverzeichnis, {rules.get('max_references') or '–'} Literaturstellen.")
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")

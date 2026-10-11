@@ -302,7 +302,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     max_fig = rules.get("max_figures") or 0
     max_pages = rules.get("max_pages") or 35
     befunde.append({
-        "punkt": f"Literaturanzahl (max. {max_refs} laut Hinweisen für Autoren)",
+        "punkt": f"Literaturanzahl (max. {max_refs})",
         "status": "✅" if total_lit_entries <= max_refs else "⚠️",
         "begruendung": f"{total_lit_entries} Literaturstellen in der zusammengeführten Liste.",
     })
@@ -317,7 +317,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     word_count = len(re.sub(r"\s+", " ", full_text).split())
     geschaetzte_seiten = word_count / 410
     befunde.append({
-        "punkt": f"Gesamtumfang (max. {max_pages} Seiten; grobe Schätzung, kein tatsächliches Rendern)",
+        "punkt": f"Gesamtumfang (max. {max_pages} Seiten inkl. Titelseite; grobe Schätzung, kein tatsächliches Rendern)",
         "status": "✅" if geschaetzte_seiten <= max_pages else "⚠️",
         "begruendung": (
             f"≈{word_count} Wörter, geschätzt ≈{geschaetzte_seiten:.1f} Seiten. Näherungswert – bitte "

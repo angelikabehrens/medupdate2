@@ -122,7 +122,42 @@ def run_intake(llm: LLM, proj: dict, toc_text: str, guide_text: str, template: t
         proj["template"] = {"name": name, "bytes": data, **intake.inspect_template(data)}
 
 
+# Toleranz für die manuell eingegebenen Obergrenzen (Seiten, Literaturstellen)
+LIMIT_TOLERANCE = {"mode": "percent", "value": 10}
+
+
+def effective_limit(value: int, tol: dict | None = None) -> int:
+    tol = tol or LIMIT_TOLERANCE
+    if not value:
+        return 0
+    if tol.get("mode") == "absolute":
+        return int(value + tol.get("value", 10))
+    return int(value * (1 + tol.get("value", 10) / 100.0))
+
+
+def apply_manual_limits(proj: dict) -> None:
+    """Manuell eingegebene Vorgaben (Seiten ohne Inhaltsverzeichnis, Literaturstellen) haben Vorrang vor
+    den Hinweisen für Autoren. Die Grenze ist der eingegebene Wert plus Toleranz; für die Seitenplanung kommt
+    die Titelseite mit dem Inhaltsverzeichnis hinzu."""
+    lim = proj.get("manual_limits") or {}
+    if proj.get("rules") is None:
+        proj["rules"] = {}
+    rules = proj["rules"]
+    tol = proj.get("limit_tolerance") or LIMIT_TOLERANCE
+    guide = rules.setdefault("_guide_limits", {"max_pages": rules.get("max_pages") or 0,
+                                               "max_references": rules.get("max_references") or 0})
+    rules["max_pages"] = effective_limit(lim["pages"], tol) + 1 if lim.get("pages") else guide["max_pages"]
+    rules["max_references"] = (effective_limit(lim["references"], tol) if lim.get("references")
+                               else guide["max_references"])
+
+
+def tolerance_text(proj: dict) -> str:
+    tol = proj.get("limit_tolerance") or LIMIT_TOLERANCE
+    return f"{tol['value']} %" if tol.get("mode") != "absolute" else f"{tol['value']}"
+
+
 def run_recommendations(llm: LLM, proj: dict, log) -> None:
+    apply_manual_limits(proj)
     chapter = (proj["toc"] or {}).get("chapter_title", "")
     rules = proj.get("rules") or {}
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
@@ -413,6 +448,7 @@ def _pick_figure(llm: LLM, title: str, images: list[bytes]) -> dict | None:
 
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
+    apply_manual_limits(proj)
     ensure_varia(proj)
     pubs = _pub_list(proj)
     if options.get("trial"):
@@ -469,7 +505,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     if options.get("joint", True):
         ready = apply_groups(llm, proj, ready, log)
 
-    if not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready):
+    limit_key = [(proj.get("rules") or {}).get("max_pages"), (proj.get("rules") or {}).get("max_references")]
+    if (not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready)
+            or proj.get("tiers_for_limits") != limit_key):
+        proj["tiers_for_limits"] = limit_key
         # Selbst ausgewählte Arbeiten werden nicht verworfen: im Notfall alle auf ½ Seite, Hinweis im Protokoll
         tiers, overflow = A.plan_tiers(_length_info(proj, ready), proj.get("rules") or {},
                                        _n_sections(proj, {t for _, t in ready}))
@@ -489,11 +528,21 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                     d.pop(k, None)
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_en")]
 
+    # Literaturbudget: Hauptquellen + State of the Art (≈3 je Abschnitt) zuerst, der Rest verteilt sich auf
+    # die externen Verweise der Würdigungen (mindestens einer je Würdigung)
+    max_refs = (proj.get("rules") or {}).get("max_references") or 0
+    ext_budget = None
+    if max_refs:
+        n_main = sum(len(proj["pubs"][p].get("group") or [p]) for p, _ in ready)
+        n_sota = _n_sections(proj, {t for _, t in ready}) * 3
+        ext_budget = max(1, (max_refs - n_main - n_sota) // max(1, len(ready)))
+
     def shorten(p):
         d, rec = proj["pubs"][p], proj["records"].get(p, {})
         if d.get("group"):
-            return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch")
-        return A.shorten(llm, d["body_en"], proj["tiers"][p], "Englisch", rec.get("abstract", ""))
+            return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch", max_ext=ext_budget)
+        return A.shorten(llm, d["body_en"], proj["tiers"][p], "Englisch", rec.get("abstract", ""),
+                         max_ext=ext_budget)
 
     log("Würdigungen werden auf die geplanten Längen gekürzt…")
     for p, res in _parallel(todo, shorten, log, "Kürzung").items():
@@ -502,6 +551,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             proj["pubs"][p]["short_en"] = proj["pubs"][p]["body_en"]  # ungekürzt weiterverwenden
         else:
             proj["pubs"][p]["short_en"], proj["pubs"][p]["short_v"] = res, SHORT_VERSION
+            proj["pubs"][p]["short_tier"] = proj["tiers"][p]
 
     # 5. Übersetzung ins Deutsche
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_de")]

@@ -104,19 +104,31 @@ def kurznachricht(llm: LLM, full_text: str, sprache_kw: str, abstract_text: str 
     return text
 
 
-def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text: str = "") -> str:
+def _ext_limit_note(max_ext: int | None) -> str:
+    if not max_ext:
+        return ""
+    return (f"\n\nLITERATURBUDGET: Wegen der Höchstzahl an Literaturstellen im Gesamtmanuskript behalte höchstens "
+            f"{max_ext} externe Literaturverweise (Leitlinien, andere Studien) – die wissenschaftlich wichtigsten. "
+            "Aussagen, deren Verweis entfällt, kürzt du oder formulierst sie ohne Quellenbezug allgemein; "
+            "erfinde keine Verweise.")
+
+
+def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text: str = "",
+            max_ext: int | None = None) -> str:
     """Kürzung nach dem Skill "studien-wuerdigung" (Längenstufen siehe prompts.SKILL_LAENGEN_STUFEN)."""
     if tier == "Kurznachricht":
         return kurznachricht(llm, full_text, sprache_kw, abstract_text)
-    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw), model=MODEL_MAIN, max_tokens=8000,
+    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext),
+                    model=MODEL_MAIN, max_tokens=8000,
                     effort="medium")
     if not text:
         raise ValueError("Die KI hat für die Kürzung keine (leere) Antwort geliefert.")
     return renumber_and_prune_citations(text)
 
 
-def shorten_joint(llm: LLM, full_text: str, tier: str, sprache_kw: str) -> str:
-    text = llm.text(M.joint_shorten_prompt(full_text, tier, sprache_kw), model=MODEL_MAIN, max_tokens=8000,
+def shorten_joint(llm: LLM, full_text: str, tier: str, sprache_kw: str, max_ext: int | None = None) -> str:
+    text = llm.text(M.joint_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext),
+                    model=MODEL_MAIN, max_tokens=8000,
                     effort="medium")
     if not text:
         raise ValueError("Die KI hat für die Kürzung keine (leere) Antwort geliefert.")

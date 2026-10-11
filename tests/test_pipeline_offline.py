@@ -461,6 +461,19 @@ def test_manual_window():
     assert res["window"] == ["2025-03-01", "2026-02-28"]
 
 
+def test_manual_limits():
+    proj = {"rules": {"max_pages": 30, "max_references": 80}, "manual_limits": {"pages": 20, "references": 50}}
+    pipeline.apply_manual_limits(proj)
+    assert proj["rules"]["max_pages"] == 23 and proj["rules"]["max_references"] == 55, proj["rules"]
+    proj["manual_limits"] = {"pages": 0, "references": 0}
+    pipeline.apply_manual_limits(proj)
+    assert proj["rules"]["max_pages"] == 30 and proj["rules"]["max_references"] == 80, "zurück zu den Hinweisen"
+    proj["limit_tolerance"] = {"mode": "absolute", "value": 10}
+    proj["manual_limits"] = {"pages": 20, "references": 50}
+    pipeline.apply_manual_limits(proj)
+    assert proj["rules"]["max_pages"] == 31 and proj["rules"]["max_references"] == 60
+
+
 def test_split_intro():
     from medupdate.appraisal import split_intro
     ft = ("Title\nAbstract\nShort.\nIntroduction\nVarices bleed often [1]. Therapy is standard [2].\n"
@@ -496,6 +509,7 @@ if __name__ == "__main__":
     test_outline_levels()
     test_repeated_citations()
     test_split_intro()
+    test_manual_limits()
     test_manual_window()
     test_sota_choice()
     test_sota_trailing_note()
