@@ -245,6 +245,11 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
                 break
         corrected_bytes = copy_document_content_into_template(doc, template_bytes, search_terms)
     else:
+        # Die Überschrift über dem Inhaltsverzeichnis (nur Marke für die Weiterverarbeitung) entfällt
+        for p in list(doc.paragraphs)[:60]:
+            if p.text.strip() in ("Inhaltsverzeichnis", "Contents", "Inhalt"):
+                p._element.getparent().remove(p._element)
+                break
         corrected_buffer = io.BytesIO()
         doc.save(corrected_buffer)
         corrected_bytes = corrected_buffer.getvalue()

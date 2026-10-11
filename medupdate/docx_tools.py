@@ -280,11 +280,7 @@ def copy_document_content_into_template(
             elif ik_idx is not None:
                 template_paragraphs[ik_idx]._element.addprevious(anchor._element)
         min_depth = min(num.count(".") for num, _ in toc_entries)
-        last = anchor._element
-        head = template_doc.add_paragraph()
-        head.add_run("Inhalt").bold = True
-        last.addnext(head._element)
-        last = head._element
+        last = anchor._element  # ohne Überschrift „Inhalt“ (Wunsch der Autorin, 2026-10-11)
         for k, (num, text) in enumerate(toc_entries):
             level = min(3, num.count(".") - min_depth + 1)
             if level == 1 and k:

@@ -251,7 +251,8 @@ def test_full_pipeline(monkeypatch=None):
     assert toc[6:] == expected, "gleiche Nummern als Überschriften im Text"
     assert not any("Leerer Abschnitt" in t or "Thema Drei" in t for _, t in toc)
     texts = [p.text for p in doc.paragraphs]
-    assert texts.index("Inhalt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
+    assert texts.index("8.1\tAbschnitt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
+    assert "Inhalt" not in texts and "Inhaltsverzeichnis" not in texts, "ohne Überschrift „Inhalt“"
     n_img = sum(1 for p in doc.paragraphs if p.text.startswith("Abb."))
     assert n_img == 0, "keine automatischen Abbildungen mehr"
     print("BEFUNDE")
