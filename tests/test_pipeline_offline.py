@@ -563,7 +563,25 @@ def test_enforce_pub_limit():
     assert dropped and dropped[0]["id"] == "e" and "Seitenumfang" in dropped[0]["reason"]
 
 
+def test_direct_upload():
+    import fitz
+    def pdf(text):
+        doc = fitz.open()
+        doc.new_page().insert_text((50, 72), text, fontsize=9)
+        return doc.tobytes()
+    rec = {"title": "Endoscopic submucosal dissection versus EMR for Barrett neoplasia", "authors": ["Meier A"],
+           "doi": "10.1000/xyz123"}
+    proj = {"records": {"1": rec}, "pubs": {}, "uploads": {}}
+    bad = pipeline.attach_direct_upload(proj, "1", "falsch.pdf", pdf("A completely different trial on liver cirrhosis outcomes"))
+    assert not bad["ok"] and "liver" in bad["found"] and "1" not in proj["pubs"]
+    good = pipeline.attach_direct_upload(proj, "1", "richtig.pdf", pdf("doi 10.1000/xyz123 Endoscopic submucosal dissection"))
+    assert good["ok"] and proj["pubs"]["1"]["upload_name"] == "richtig.pdf" and proj["uploads"]["richtig.pdf"]["pmid"] == "1"
+    forced = pipeline.attach_direct_upload(proj, "1", "falsch.pdf", pdf("Another unrelated paper about colon"), force=True)
+    assert forced["ok"] and proj["pubs"]["1"]["upload_checked"] == "von Ihnen bestätigt"
+
+
 if __name__ == "__main__":
+    test_direct_upload()
     test_enforce_pub_limit()
     test_reassign_topics()
     test_llm_retry_and_cost()

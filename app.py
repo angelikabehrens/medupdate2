@@ -324,23 +324,43 @@ if any("recommended" in t for t in proj["topics"].values()):
     st.markdown("<div style='font-size:2.2rem; font-weight:700; margin-top:2rem;'>2. Volltexte und eigene "
                 "Manuskripte</div>", unsafe_allow_html=True)
 
-    wanted = pipeline.selected_pmids(proj)
+    wanted = list(dict.fromkeys(pipeline.selected_pmids(proj)))
     n_sec = len({t.get("section_number") or tid for tid, t in proj["topics"].items() if t.get("enabled", True)})
     st.info(f"Grobe Schätzung der KI-Kosten für Schritt 2: etwa {len(wanted) * 0.6 + n_sec * 0.3 + 1:.0f}–"
             f"{len(wanted) * 1.5 + n_sec * 0.6 + 3:.0f} USD für {len(wanted)} Publikationen. Die tatsächlichen "
             "Kosten misst die App und zeigt sie nach jedem Lauf an; das Kostenlimit unten hält den Lauf "
             "rechtzeitig an.")
-    missing_ft = [p for p in wanted if not proj["pubs"].get(p, {}).get("full_text")
-                  and not proj["records"].get(p, {}).get("is_oa")]
-    if missing_ft:
-        st.write("**Bitte diese Originalpublikationen als PDF hochladen** (nicht frei verfügbar):")
-        for p in missing_ft:
-            r = proj["records"].get(p, {})
-            st.markdown(f"- {r.get('title', p)} — {r.get('journal', '')} {r.get('year', '')}"
-                        + (f" · [DOI](https://doi.org/{r['doi']})" if r.get("doi") else ""))
-    st.caption("Frei verfügbare Volltexte lädt die App selbst. Hochgeladene PDFs werden automatisch der "
-               "passenden Publikation zugeordnet; Dateien, die zu keiner Empfehlung passen, werden als zusätzliche "
-               "Publikation gewürdigt und dem passenden Thema zugeordnet.")
+    need_pdf = [p for p in wanted if proj["pubs"].get(p, {}).get("fulltext_source") == "Upload"
+                or (not proj["pubs"].get(p, {}).get("full_text") and not proj["records"].get(p, {}).get("is_oa"))]
+    if need_pdf:
+        st.write("**Bitte diese Originalpublikationen als PDF hochladen** (nicht frei verfügbar) – direkt bei der "
+                 "jeweiligen Publikation. Die App prüft sofort, ob die Datei zur Publikation passt.")
+        for p in need_pdf:
+            r, d = proj["records"].get(p, {}), proj["pubs"].get(p, {})
+            c_info, c_up = st.columns([3, 2])
+            c_info.markdown(f"**{r.get('title', p)}**  \n{(r.get('authors') or [''])[0]} · {r.get('journal', '')} "
+                            f"{r.get('year', '')}" + (f" · [DOI](https://doi.org/{r['doi']})" if r.get("doi") else ""))
+            if d.get("upload_name"):
+                c_info.success(f"✅ {d['upload_name']} – {d.get('upload_checked', 'passt')}")
+            f = c_up.file_uploader("PDF zu dieser Publikation", type=["pdf"], key=f"up_{p}",
+                                   label_visibility="collapsed")
+            if f is not None and f.name != d.get("upload_name"):
+                data = f.getvalue()
+                res = pipeline.attach_direct_upload(proj, p, f.name, data)
+                if res["ok"]:
+                    st.rerun()
+                if res["empty"]:
+                    c_up.warning("⚠️ Aus der PDF ließ sich kein Text lesen (eingescannt?). Bitte eine andere Fassung "
+                                 "hochladen.")
+                else:
+                    c_up.warning("⚠️ Die Datei scheint nicht zu dieser Publikation zu passen (Titel/DOI/Erstautor "
+                                 f"nicht gefunden). Gefunden: „{res['found']}“")
+                    if c_up.button("Trotzdem verwenden", key=f"force_{p}"):
+                        pipeline.attach_direct_upload(proj, p, f.name, data, force=True)
+                        st.rerun()
+    st.caption("Frei verfügbare Volltexte lädt die App selbst. Im Feld unten können Sie weitere Arbeiten "
+               "hochladen; sie werden automatisch der passenden Publikation oder als zusätzliche Publikation dem "
+               "passenden Thema zugeordnet.")
 
     missing_gl = [(tid, g) for tid, t in proj["topics"].items() if t.get("enabled", True)
                   for g in t.get("guidelines", []) if not g.get("text")]
@@ -352,7 +372,7 @@ if any("recommended" in t for t in proj["topics"].values()):
 
     # 2a. Hochladen und Themenzuordnung prüfen – immer vor dem Schreiben
     with st.form("step2_upload"):
-        pub_files = st.file_uploader("Originalpublikationen und weitere Publikationen (PDF)", type=["pdf"],
+        pub_files = st.file_uploader("Weitere Publikationen (PDF)", type=["pdf"],
                                      accept_multiple_files=True)
         style_files = st.file_uploader("Eigene Manuskripte der letzten 3 Jahre (für den Schreibstil)",
                                        type=["docx", "pdf"], accept_multiple_files=True)

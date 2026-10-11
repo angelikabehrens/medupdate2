@@ -350,6 +350,24 @@ def match_uploads(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
         ensure_varia(proj)
 
 
+def attach_direct_upload(proj: dict, p: str, name: str, data: bytes, force: bool = False) -> dict:
+    """PDF direkt bei einer Publikation der Literaturliste hochgeladen: wie in MyLuo kurz prüfen, ob es die
+    richtige Publikation ist (DOI oder Titel plus Erstautor im Kopfbereich). Ohne KI, daher kostenlos.
+    Passt sie nicht, wird sie nur mit force=True übernommen. Rückgabe: {"ok", "match", "found"}."""
+    text = extract_pdf_text(data)
+    rec = proj["records"].get(p, {})
+    match = upload_matches(text, rec)
+    found = next((ln.strip() for ln in text.splitlines() if len(ln.strip()) > 25), "")[:160]
+    if not (match or force):
+        return {"ok": False, "match": False, "found": found, "empty": not text.strip()}
+    d = proj["pubs"].setdefault(p, {})
+    d.update({"pdf": data, "full_text": text, "fulltext_source": "Upload", "upload_name": name,
+              "upload_checked": "passt" if match else "von Ihnen bestätigt"})
+    d.pop("images", None)
+    proj["uploads"][name] = {"pmid": p, "text_len": len(text)}
+    return {"ok": True, "match": match, "found": found, "empty": not text.strip()}
+
+
 VARIA = "VARIA"
 
 
