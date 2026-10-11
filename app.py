@@ -364,9 +364,15 @@ if any("recommended" in t for t in proj["topics"].values()):
             f"Bereits gekürzte Würdigungen neu kürzen (kürzere Sätze, weniger Statistik; {n_old} betroffen, "
             f"ca. {0.2 * n_old:.0f} USD)", value=False, disabled=not n_old,
             help="Die kritischen Würdigungen selbst werden nicht neu erstellt, nur Kürzung, Übersetzung und Stil.")
-        go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen")
+        opt_reassign = st.checkbox(
+            "Themenzuordnung aller Publikationen durch die KI prüfen (Schwerpunkt der Arbeit; gleiche Fragestellung "
+            "→ gleiches Thema)", value=True, help="Ein KI-Aufruf für alle Publikationen zusammen, ca. 0,2–0,5 USD. "
+                                                   "Ihre eigenen Änderungen in der Übersicht bleiben erhalten.")
+        c1, c2 = st.columns(2)
+        go_check = c1.form_submit_button("🧩 Hochladen und Themenzuordnung prüfen")
+        go2 = c2.form_submit_button("✍️ Manuskript automatisch erstellen")
 
-    if go2:
+    if go_check or go2:
         llm = get_llm(float(opt_budget))
         if llm:
             uploads = {f.name: f.read() for f in (pub_files or [])}
@@ -378,14 +384,57 @@ if any("recommended" in t for t in proj["topics"].values()):
                 tid = next((t for title, t in topics_for_gl.items() if title and title[:30] in text.lower()[:5000]), "")
                 proj["guideline_uploads"][f.name] = {"topic_id": tid, "text": text}
 
+            def check(log):
+                if uploads:
+                    pipeline.match_uploads(llm, proj, uploads, log)
+                pipeline.reassign_topics(llm, proj, log)
+
             def step2(log):
                 if uploads:
                     pipeline.match_uploads(llm, proj, uploads, log)
                 pipeline.run_manuscript(llm, proj, log, {"figures": opt_fig, "sota": opt_sota, "style": opt_style,
                                                          "trial": opt_trial, "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
-                                                         "reshorten": opt_reshorten})
+                                                         "reshorten": opt_reshorten, "reassign": opt_reassign})
 
-            run_with_status("Manuskript wird erstellt", step2, llm)
+            if go_check:
+                run_with_status("Themenzuordnung wird geprüft", check, llm)
+            else:
+                run_with_status("Manuskript wird erstellt", step2, llm)
+
+    if proj.get("reassigned_for"):
+        overview = pipeline.assignment_overview(proj)
+        n_moved = sum(1 for r in overview if r["kind"] == "topic" for x in r["pubs"] if x["moved_from"])
+        with st.expander(f"📋 Themenzuordnung der Publikationen ({n_moved} verschoben)", expanded=go_check):
+            st.caption("Überschriften des Inhaltsverzeichnisses mit den zugeordneten Publikationen. ↪ = von der KI "
+                       "(oder von Ihnen) in ein anderes Thema verschoben, 🔗 = gemeinsame Würdigung. Ändern Sie eine "
+                       "Zuordnung bei Bedarf unten; die KI übernimmt Ihre Festlegung.")
+            for r in overview:
+                if r["kind"] == "section":
+                    st.markdown(f"**{r['text']}**")
+                    continue
+                st.markdown(f"&nbsp;&nbsp;&nbsp;*{r['text']}*" + ("" if r["pubs"] else " — keine Publikation"))
+                for x in r["pubs"]:
+                    line = f"- {x['title']} — {x['journal']} {x['year']}" + (" · hochgeladen" if x["uploaded"] else "")
+                    if x["moved_from"]:
+                        line += f"  \n  ↪ aus „{x['moved_from']}“" + (f": {x['reason']}" if x["reason"] else "")
+                    if x["joint"]:
+                        line += f"  \n  🔗 Gemeinsame Würdigung: {x['joint']}"
+                    st.markdown(line)
+            st.download_button("⬇️ Themenzuordnung als Word-Datei", pipeline.assignment_docx(proj),
+                               f"Themenzuordnung_{date.today().isoformat()}.docx", DOCX_MIME)
+            cur = pipeline.current_topics(proj)
+            tids = [tid for tid, t in proj["topics"].items() if t.get("enabled", True)]
+            with st.form("reassign_manual"):
+                pick = st.selectbox("Publikation", list(cur),
+                                    format_func=lambda p: proj["records"].get(p, {}).get("title", p)[:120])
+                dst = st.selectbox("Neues Thema", tids, format_func=lambda t: (proj["topics"][t].get("number", "")
+                                                                             + " " + proj["topics"][t]["title"]).strip())
+                if st.form_submit_button("Zuordnung ändern") and pick:
+                    if dst == pipeline.VARIA and not proj["pubs"].get(pick, {}).get("extra"):
+                        st.warning("Unter „Varia“ stehen nur zusätzlich hochgeladene Publikationen.")
+                    else:
+                        pipeline.set_manual_topic(proj, pick, dst)
+                        st.rerun()
 
     out = proj.get("outputs") or {}
     partial = pipeline.partial_docx(proj) if any(d.get("body_en") for d in proj["pubs"].values()) else None

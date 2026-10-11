@@ -193,6 +193,36 @@ Publikationen:
 {pubs_block}"""
 
 
+def reassign_prompt(chapter: str, topics_block: str, pubs_block: str) -> str:
+    return f"""Für das Handbuchkapitel „{chapter}“ liegen alle Publikationen vor, die im Manuskript gewürdigt \
+werden. Jede ist vorläufig einem Thema des Inhaltsverzeichnisses zugeordnet (aus der Literatursuche oder beim \
+Hochladen). Prüfe die Zuordnung im Gesamtblick und ordne jede Publikation dem Thema zu, zu dem ihr \
+inhaltlicher SCHWERPUNKT gehört.
+
+Regeln:
+- Maßgeblich ist die eigentliche Fragestellung der Arbeit, nicht ein Stichwort im Titel. Beispiel: Eine \
+Arbeit zur endoskopischen Resektion von Barrettkarzinomen mit klinischer Fragestellung (z.B. Rezidiv, \
+Überleben, Indikation) gehört zum Thema Barrettkarzinom. Untersucht sie einen technischen Aspekt der \
+Resektion (z.B. Technikvergleich, Resektionsgerät, En-bloc-Rate), gehört sie zum Thema endoskopische Resektion.
+- Bevorzuge das spezifischste passende Thema. Die bisherige Zuordnung nur ändern, wenn ein anderes Thema \
+klar besser passt.
+- Publikationen, die nahezu dieselbe klinische Fragestellung bearbeiten (gleiche Population/Indikation, \
+vergleichbare Endpunkte, z.B. verschiedene endoskopische Techniken zur Therapie derselben Indikation), \
+werden später gemeinsam gewürdigt. Sie MÜSSEN demselben Thema zugeordnet werden. Nenne sie in \
+"same_question" (2 oder 3 je Gruppe, jede Publikation höchstens in einer Gruppe; dasselbe Thema allein \
+reicht nicht, im Zweifel keine Gruppe).
+- topic_id "" (= Abschnitt „Varia“) ist nur für Publikationen mit dem Vermerk [hochgeladen] erlaubt, die \
+zu keinem Thema wirklich passen. Alle anderen bekommen ein Thema aus der Liste.
+- "reason_de": nur bei einer geänderten Zuordnung ein kurzer Satz (höchstens 20 Wörter), warum; sonst "".
+- "question_de": die gemeinsame Fragestellung als kurzer Titel (höchstens ca. 12 Wörter).
+
+Inhaltsverzeichnis (Themen-ID: Nummer Titel):
+{topics_block}
+
+Publikationen (ID | bisheriges Thema | Titel | Fragestellung | Inhalt):
+{pubs_block}"""
+
+
 def figure_pick_prompt(title: str, n_images: int) -> str:
     return f"""Die {n_images} Bilder stammen aus der Publikation „{title}“. Wähle das EINE Bild, das die \
 Hauptaussage der Studie am besten zeigt (z.B. Kaplan-Meier-Kurve oder Forest-Plot zum primären Endpunkt, \
@@ -386,8 +416,11 @@ Neue Publikationen:
 {ms}"""
 
 
-def group_prompt(topic: str, pubs: list[dict]) -> str:
+def group_prompt(topic: str, pubs: list[dict], hints: list[list[str]] | None = None) -> str:
     ps = "\n".join(f"- id {p['id']} | {p['title']} | Fragestellung: {p['question']} | {p['summary']}" for p in pubs)
+    if hints:
+        ps += ("\n\nBei der Prüfung der Themenzuordnung wurden diese Publikationen als nahezu gleiche Fragestellung "
+               "erkannt (bitte bestätigen oder verwerfen): " + "; ".join(" + ".join(h) for h in hints))
     return f"""Du erhältst die Publikationen, die im Manuskript zum Thema „{topic}“ besprochen werden. Prüfe, \
 ob zwei oder drei davon nahezu dieselbe klinische Fragestellung bearbeiten, z.B. verschiedene \
 endoskopische Techniken zur Therapie derselben Indikation oder zwei Studien unterschiedlicher \

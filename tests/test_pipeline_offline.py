@@ -501,7 +501,44 @@ def test_repeated_citations():
     assert d2.paragraphs[0].text == "A. B. C (1,4)", d2.paragraphs[0].text
 
 
+def test_reassign_topics():
+    class L:
+        calls = 0
+
+        def json(self, prompt, schema, **kw):
+            L.calls += 1
+            assert "Barrettkarzinom" in prompt and "[hochgeladen]" in prompt
+            return {"assignments": [{"pub_id": "1", "topic_id": "T2", "reason_de": "Technischer Aspekt der Resektion."},
+                                    {"pub_id": "2", "topic_id": "T1", "reason_de": ""},
+                                    {"pub_id": "X", "topic_id": "T1", "reason_de": "Passt zu Barrett."}],
+                    "same_question": [{"pub_ids": ["3", "2"], "question_de": "ESD versus EMR"}]}
+    rk = {"question_key": "q", "length_score": 70}
+    proj = {"toc": {"chapter_title": "GI"}, "records": {p: {"title": f"Studie {p}"} for p in ["1", "2", "3", "X"]},
+            "topics": {"T1": {"id": "T1", "title": "Barrettkarzinom", "number": "1.1", "section_number": "1",
+                              "section_title": "Ösophagus", "recommended": ["1", "2"], "ranking": {"1": rk, "2": rk}},
+                       "T2": {"id": "T2", "title": "Endoskopische Resektion", "number": "1.2", "section_number": "1",
+                              "section_title": "Ösophagus", "recommended": ["3"], "ranking": {"3": rk}}},
+            "pubs": {"X": {"extra": True, "topic_id": "", "full_text": "Barrett text"}}}
+    pipeline.reassign_topics(L(), proj, lambda m: None)
+    cur = pipeline.current_topics(proj)
+    # 1 technisch → Resektion; 2 und 3 gleiche Fragestellung → gemeinsames Thema (das von 3); X aus Varia → Barrett
+    assert cur == {"1": "T2", "2": "T2", "3": "T2", "X": "T1"}, cur
+    assert proj["topics"]["T2"]["ranking"]["1"] == rk
+    assert proj["question_groups"] == [{"pmids": ["3", "2"], "question_de": "ESD versus EMR"}]
+    ov = [r for r in pipeline.assignment_overview(proj) if r["kind"] == "topic"]
+    t2 = {x["id"]: x for x in ov[1]["pubs"]}
+    assert t2["1"]["moved_from"] == "Barrettkarzinom" and t2["2"]["joint"] == "ESD versus EMR"
+    pipeline.reassign_topics(L(), proj, lambda m: None)
+    assert L.calls == 1, "unveränderte Zuordnung wird nicht erneut geprüft"
+    pipeline.set_manual_topic(proj, "1", "T1")
+    assert pipeline.current_topics(proj)["1"] == "T1"
+    pipeline.reassign_topics(L(), proj, lambda m: None)
+    assert L.calls == 1 and pipeline.current_topics(proj)["1"] == "T1", "eigene Festlegung bleibt"
+    assert pipeline.assignment_docx(proj)[:2] == b"PK"
+
+
 if __name__ == "__main__":
+    test_reassign_topics()
     test_llm_retry_and_cost()
     test_results_saved_before_abort()
     test_search_broadening()

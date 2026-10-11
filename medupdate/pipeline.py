@@ -366,6 +366,164 @@ def ensure_varia(proj: dict) -> None:
         proj["pubs"][p]["topic_id"] = VARIA
 
 
+REASSIGN_SCHEMA = obj({"assignments": arr(obj({"pub_id": STR, "topic_id": STR, "reason_de": STR})),
+                       "same_question": arr(obj({"pub_ids": arr(STR), "question_de": STR}))})
+
+
+def current_topics(proj: dict) -> dict[str, str]:
+    """{pmid: topic_id} aller Publikationen, die ins Manuskript kommen (ohne gemeinsame Würdigungen)."""
+    return {p: t for p, t in _pub_list(proj) if not proj["pubs"].get(p, {}).get("group")}
+
+
+def move_pub(proj: dict, p: str, dst: str) -> None:
+    """Verschiebt eine Publikation in ein anderes Thema (die Bewertung aus Schritt 1 wandert mit)."""
+    src = current_topics(proj).get(p)
+    if not src or src == dst or dst not in proj["topics"]:
+        return
+    d = proj["pubs"].setdefault(p, {})
+    d.setdefault("home_topic", src)
+    if d.get("extra"):
+        d["topic_id"] = dst
+        return
+    s_t, d_t = proj["topics"][src], proj["topics"][dst]
+    s_t["selected"] = [x for x in s_t.get("selected", s_t.get("recommended", [])) if x != p]
+    d_t["selected"] = list(d_t.get("selected", d_t.get("recommended", []))) + [p]
+    if p in s_t.get("ranking", {}):
+        d_t.setdefault("ranking", {})[p] = s_t["ranking"][p]
+
+
+def _reassign_key(proj: dict) -> list:
+    return sorted(current_topics(proj)) + sorted(f"{p}={t}" for p, t in (proj.get("topic_manual") or {}).items())
+
+
+def reassign_topics(llm: LLM, proj: dict, log, force: bool = False) -> None:
+    """Prüft nach dem Hochladen die Themenzuordnung ALLER Publikationen im Gesamtblick: Schwerpunkt der
+    Arbeit entscheidet (klinisch → Krankheitsbild, technischer Aspekt → Verfahren); Arbeiten mit nahezu
+    gleicher Fragestellung kommen ins selbe Thema und werden als Gruppe vorgemerkt."""
+    ensure_varia(proj)
+    if not force and proj.get("reassigned_for") == _reassign_key(proj):
+        return
+    cur = current_topics(proj)
+    if len(cur) < 2:
+        proj["reassigned_for"] = _reassign_key(proj)
+        return
+    log("Themenzuordnung aller Publikationen wird geprüft…")
+    manual = proj.get("topic_manual") or {}
+    topics = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and not t.get("varia")]
+    topics_block = "\n".join(
+        f"{tid}: {t.get('number', '')} {t['title']}"
+        + (f" (Abschnitt {t.get('section_number', '')} {t.get('section_title', '')})" if t.get("section_title") else "")
+        for tid, t in topics)
+    lines = []
+    for p, tid in cur.items():
+        rec, d = proj["records"].get(p, {}), proj["pubs"].get(p, {})
+        q = proj["topics"][tid].get("ranking", {}).get(p, {}).get("question_key", "")
+        summary = " ".join((rec.get("abstract") or d.get("full_text", "")[:900]).split())[:600]
+        lines.append(f"- {p}{' [hochgeladen]' if d.get('extra') else ''}{' [vom Nutzer festgelegt]' if p in manual else ''}"
+                     f" | {'' if tid == VARIA else tid} | {rec.get('title', p)} | {q} | {summary}")
+    res = llm.json(P.reassign_prompt((proj["toc"] or {}).get("chapter_title", ""), topics_block, "\n".join(lines)),
+                   REASSIGN_SCHEMA, model=MODEL_MAIN, max_tokens=6000, effort="medium")
+    valid = {tid for tid, _ in topics}
+    target = {}
+    for a in res.get("assignments", []):
+        p, tid = a.get("pub_id", ""), a.get("topic_id", "")
+        if p not in cur or p in manual:
+            continue
+        if tid in valid:
+            target[p] = (tid, a.get("reason_de", "").strip())
+        elif not tid and proj["pubs"].get(p, {}).get("extra"):
+            target[p] = (VARIA, a.get("reason_de", "").strip())
+    groups, used = [], set()
+    for g in res.get("same_question", []):
+        ids = [p for p in dict.fromkeys(g.get("pub_ids", [])) if p in cur and p not in used]
+        if 2 <= len(ids) <= 3:
+            used.update(ids)
+            groups.append({"pmids": ids, "question_de": g.get("question_de", "").strip()})
+    # Gleiche Fragestellung → gleiches Thema: das Thema der ersten (bzw. vom Nutzer festgelegten) Publikation
+    for g in groups:
+        fixed = next((manual[p] for p in g["pmids"] if p in manual), None)
+        tid = fixed or target.get(g["pmids"][0], (cur[g["pmids"][0]], ""))[0]
+        for p in g["pmids"]:
+            if p not in manual and target.get(p, (cur[p],))[0] != tid:
+                target[p] = (tid, f"Gleiche Fragestellung wie „{g['question_de']}“; gemeinsame Würdigung.")
+    moved = 0
+    for p, (tid, reason) in target.items():
+        if tid != cur[p]:
+            if tid == VARIA and VARIA not in proj["topics"]:
+                proj["pubs"][p].setdefault("home_topic", cur[p])
+                proj["pubs"][p]["topic_id"] = ""
+                ensure_varia(proj)
+            else:
+                move_pub(proj, p, tid)
+            proj["pubs"][p]["move_reason"] = reason
+            moved += 1
+    for p, tid in manual.items():
+        move_pub(proj, p, tid)
+    proj["question_groups"] = groups
+    proj["reassigned_for"] = _reassign_key(proj)
+    log(f"Themenzuordnung geprüft: {moved} Publikation(en) verschoben, {len(groups)} Gruppe(n) mit gleicher "
+        "Fragestellung.")
+
+
+def set_manual_topic(proj: dict, p: str, tid: str) -> None:
+    """Zuordnung durch die Nutzerin; die KI-Prüfung ändert sie danach nicht mehr."""
+    proj.setdefault("topic_manual", {})[p] = tid
+    move_pub(proj, p, tid)
+    proj["pubs"][p]["move_reason"] = "Von Ihnen festgelegt."
+    proj["reassigned_for"] = _reassign_key(proj)
+
+
+def assignment_overview(proj: dict) -> list[dict]:
+    """Überschriften des Inhaltsverzeichnisses mit den zugeordneten Publikationen (für Anzeige und Word-Liste)."""
+    cur = current_topics(proj)
+    group_of = {p: g for g in proj.get("question_groups", []) for p in g["pmids"]}
+    out, last_sec = [], None
+    for tid, t in proj["topics"].items():
+        if not t.get("enabled", True):
+            continue
+        sec = (t.get("section_number", ""), t.get("section_title", ""))
+        if sec != last_sec and sec[1] and sec[1] != t["title"]:
+            out.append({"kind": "section", "text": f"{sec[0]} {sec[1]}".strip()})
+        last_sec = sec
+        pubs = []
+        for p in (p for p, x in cur.items() if x == tid):
+            rec, d = proj["records"].get(p, {}), proj["pubs"].get(p, {})
+            home = d.get("home_topic")
+            g = group_of.get(p)
+            pubs.append({"id": p, "title": rec.get("title", p), "journal": rec.get("journal", ""),
+                         "year": rec.get("year", ""), "uploaded": bool(d.get("extra")),
+                         "moved_from": proj["topics"][home]["title"] if home and home != tid and home in proj["topics"] else "",
+                         "reason": d.get("move_reason", "") if home and home != tid else "",
+                         "joint": g["question_de"] if g and all(cur.get(m) == tid for m in g["pmids"]) else ""})
+        out.append({"kind": "topic", "id": tid, "text": f"{t.get('number', '')} {t['title']}".strip(), "pubs": pubs})
+    return out
+
+
+def assignment_docx(proj: dict) -> bytes:
+    from io import BytesIO
+    from docx import Document
+    doc = Document()
+    doc.add_heading(f"Themenzuordnung – {(proj['toc'] or {}).get('chapter_title', '')}", level=1)
+    for row in assignment_overview(proj):
+        if row["kind"] == "section":
+            doc.add_heading(row["text"], level=2)
+            continue
+        doc.add_heading(row["text"], level=3)
+        if not row["pubs"]:
+            doc.add_paragraph("Keine Publikation (entfällt im Manuskript).").italic = True
+        for x in row["pubs"]:
+            para = doc.add_paragraph(style="List Bullet")
+            para.add_run(f"{x['title']} — {x['journal']} {x['year']}".strip())
+            notes = (["hochgeladen"] if x["uploaded"] else []) + \
+                ([f"verschoben aus „{x['moved_from']}“: {x['reason']}".rstrip(": ")] if x["moved_from"] else []) + \
+                ([f"gemeinsame Würdigung: {x['joint']}"] if x["joint"] else [])
+            if notes:
+                para.add_run(" (" + "; ".join(notes) + ")").italic = True
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
 # ======================================================================
 # SCHRITT 2: Automatische Erstellung
 # ======================================================================
@@ -452,6 +610,13 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     apply_manual_limits(proj)
     ensure_varia(proj)
+    if options.get("reassign", True):
+        try:
+            reassign_topics(llm, proj, log)
+        except AccountError:
+            raise
+        except Exception as ex:
+            _err(proj, "Themenzuordnung prüfen", ex)
     pubs = _pub_list(proj)
     if options.get("trial"):
         # Probelauf: gewähltes (sonst erstes) Thema mit Publikationen, höchstens 2 Arbeiten – kostet nur
@@ -849,7 +1014,8 @@ def find_groups(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[dict]:
     pubs = [{"id": p, "title": proj["records"].get(p, {}).get("title", p),
              "question": rk.get(p, {}).get("question_key", ""),
              "summary": " ".join((proj["records"].get(p, {}).get("abstract") or "").split())[:500]} for p in pmids]
-    res = llm.json(P.group_prompt(proj["topics"][tid]["title"], pubs), GROUP_SCHEMA, model=MODEL_MAIN,
+    hints = [g["pmids"] for g in proj.get("question_groups", []) if all(p in pmids for p in g["pmids"])]
+    res = llm.json(P.group_prompt(proj["topics"][tid]["title"], pubs, hints), GROUP_SCHEMA, model=MODEL_MAIN,
                    max_tokens=3000, effort="medium")
     out, used = [], set()
     for g in res.get("groups", []):
