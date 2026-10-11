@@ -253,7 +253,7 @@ def test_full_pipeline(monkeypatch=None):
     texts = [p.text for p in doc.paragraphs]
     assert texts.index("Inhalt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
     n_img = sum(1 for p in doc.paragraphs if p.text.startswith("Abb."))
-    assert n_img >= 1, "Abbildung erwartet"
+    assert n_img == 0, "keine automatischen Abbildungen mehr"
     print("BEFUNDE")
     for b in out["befunde"]:
         print(b["status"], b["punkt"], "–", b["begruendung"][:100])

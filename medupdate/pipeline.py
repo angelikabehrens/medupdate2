@@ -25,7 +25,7 @@ from .citations import (
     strip_appraisal_preamble,
 )
 from .config import MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
-from .files import extract_images_from_pdf, extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
+from .files import extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
 from .llm import LLM, STR, AccountError, arr, enum, obj
@@ -289,20 +289,13 @@ def match_uploads(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
     wanted = {p: proj["records"][p] for p in selected_pmids(proj) if p in proj["records"]}
     unmatched = []
     for name, data in uploads.items():
-        if name in proj["uploads"]:
-            # Bereits zugeordnet (z.B. aus einem geladenen Zwischenstand ohne PDFs): PDF nur für die
-            # Abbildungsauswahl wieder anhängen, Text und Zuordnung bleiben
-            pm = proj["uploads"][name].get("pmid")
-            d = proj["pubs"].get(pm or "", {})
-            if pm and "pdf" not in d and "images" not in d:
-                d["pdf"] = data
+        if name in proj["uploads"]:  # bereits zugeordnet: Text und Zuordnung bleiben
             continue
         text = extract_pdf_text(data)
         hit = next((p for p, rec in wanted.items() if upload_matches(text, rec)), None)
         proj["uploads"][name] = {"pmid": hit, "text_len": len(text)}
         if hit:
-            proj["pubs"].setdefault(hit, {})["pdf"] = data
-            proj["pubs"][hit]["full_text"] = text
+            proj["pubs"].setdefault(hit, {})["full_text"] = text
         else:
             unmatched.append((name, data, text))
 
@@ -330,7 +323,7 @@ def match_uploads(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
         if pmid not in proj["records"]:
             proj["records"].update(pubmed.fetch_records([pmid], proj["email"]))
         proj["uploads"][name]["pmid"] = pmid
-        proj["pubs"].setdefault(pmid, {}).update({"pdf": data, "full_text": text, "extra": True})
+        proj["pubs"].setdefault(pmid, {}).update({"full_text": text, "extra": True})
         extra.append(pmid)
 
     if extra:
@@ -363,7 +356,7 @@ def attach_direct_upload(proj: dict, p: str, name: str, data: bytes, force: bool
     if not (match or force):
         return {"ok": False, "match": False, "found": found, "empty": not text.strip()}
     d = proj["pubs"].setdefault(p, {})
-    d.update({"pdf": data, "full_text": text, "fulltext_source": "Upload", "upload_name": name,
+    d.update({"full_text": text, "fulltext_source": "Upload", "upload_name": name,
               "upload_checked": "passt" if match else "von Ihnen bestätigt"})
     d.pop("images", None)
     proj["uploads"][name] = {"pmid": p, "text_len": len(text)}
@@ -739,39 +732,6 @@ def _main_text(text: str) -> str:
     return text[: len(text) // 3 + m.start()] if m else text
 
 
-FIG_SCHEMA = obj({"index": {"type": "integer"}, "typ": enum("Tabelle", "Abbildung"), "caption_en": STR,
-                  "caption_de": STR})
-
-
-def _pick_figure(llm: LLM, title: str, images: list[bytes]) -> dict | None:
-    from PIL import Image  # Pillow wird von Streamlit mitinstalliert
-    import io
-    content, kept = [], []
-    for img in images[:12]:
-        try:
-            im = Image.open(io.BytesIO(img))
-            if im.width < 250 or im.height < 150:
-                continue
-            im = im.convert("RGB")
-            im.thumbnail((1400, 1400))
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=85)
-            data = buf.getvalue()
-        except Exception:
-            continue
-        kept.append(data)
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                                     "data": base64.b64encode(data).decode()}})
-    if not kept:
-        return None
-    content.append({"type": "text", "text": P.figure_pick_prompt(title, len(kept))})
-    res = llm.json(content, FIG_SCHEMA, max_tokens=1500, effort="low")
-    i = res.get("index", -1)
-    if not isinstance(i, int) or not (0 <= i < len(kept)):
-        return None
-    return {"bytes": kept[i], "typ": res["typ"], "caption_en": res["caption_en"], "caption_de": res["caption_de"]}
-
-
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     apply_manual_limits(proj)
@@ -793,7 +753,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         pubs = [(p, t) for p, t in pubs if t == first][:2]
     log(f"{len(pubs)} Publikationen in {len({t for _, t in pubs})} Themen werden verarbeitet.")
 
-    # 1. Volltexte (Upload oder Open Access) und Abbildungen
+    # 1. Volltexte (Upload oder Open Access)
     for pmid, _tid in pubs:
         d = proj["pubs"].setdefault(pmid, {})
         rec = proj["records"].get(pmid, {})
@@ -803,11 +763,11 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             if pdf:
                 text = extract_pdf_text(pdf)
                 if looks_like_real_fulltext(text, rec.get("abstract", "")):
-                    d["pdf"], d["full_text"], d["fulltext_source"] = pdf, text, "Open Access"
-        if d.get("pdf") and "images" not in d and options.get("figures", True):
-            d["images"] = extract_images_from_pdf(d["pdf"], max_images=8)
-        if d.get("full_text") and ("images" in d or not options.get("figures", True)):
-            d.pop("pdf", None)  # Text und Bildkandidaten sind extrahiert: PDF nicht mehr im Speicher halten
+                    d["full_text"], d["fulltext_source"] = text, "Open Access"
+        # Abbildungen werden nicht mehr automatisch ausgewählt (2026-10-11): PDF nach der Textextraktion
+        # nicht mehr im Speicher halten
+        d.pop("pdf", None)
+        d.pop("images", None)
 
     # 2. Kritische Würdigung (englisch, wie in MyLuo als Arbeitsfassung)
     todo = [(p, (p, t)) for p, t in pubs if not proj["pubs"][p].get("appraisal_en")]
@@ -989,24 +949,6 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             except Exception as ex:
                 _err(proj, "Rückbezüge auf frühere Manuskripte", ex)
 
-    # 8. Abbildungen
-    if options.get("figures", True):
-        max_fig = (proj.get("rules") or {}).get("max_figures") or 15
-        cand = [p for p, _ in ready if proj["pubs"][p].get("images") and "figure" not in proj["pubs"][p]
-                and proj["tiers"].get(p) not in ("Kurznachricht", "½ Seite (Kurz)")]
-        already = sum(1 for p, _ in ready if proj["pubs"][p].get("figure"))
-        cand = cand[: max(0, max_fig - already)]
-
-        def fig(p):
-            return _pick_figure(llm, proj["records"].get(p, {}).get("title", ""), proj["pubs"][p]["images"])
-
-        log("Abbildungen werden ausgewählt…")
-        for p, res in _parallel([(p, p) for p in cand], fig, log, "Abbildungen").items():
-            proj["pubs"][p]["figure"] = None if isinstance(res, Exception) else res
-    for p, _ in ready:  # Speicher freigeben: Kandidatenbilder werden nicht mehr gebraucht
-        if "figure" in proj["pubs"][p]:
-            proj["pubs"][p].pop("images", None)
-
     # 9. Manuskripte zusammensetzen, Literatur zusammenführen, Formatvorlage, formale Prüfung
     log("Gesamtmanuskript wird zusammengesetzt und formal geprüft…")
     rules = proj.get("rules") or {}
@@ -1050,13 +992,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                 text, lit = reconcile_local_citations(text, d["literature"], protected_count=max(1, len(members)))
                 if members:
                     rec = dict(rec, title=d["title_de" if lang == "Deutsch" else "title_en"])
-                fig = d.get("figure")
-                figure = ({"bytes": fig["bytes"], "typ": fig["typ"],
-                           "caption": fig["caption_de" if lang == "Deutsch" else "caption_en"]} if fig else None)
                 block["pubs"].append({"title": rec.get("title", p), "rec": rec, "abstract": abstract,
                                       "recs": [proj["records"].get(m, {}) for m in members],
                                       "lines": [l for l in text.split("\n") if l.strip()], "literature": lit,
-                                      "figure": figure})
+                                      "figure": None})
             blocks.append(block)
         raw = build_docx(tr(title), blocks, lang)
         key = "DE" if lang == "Deutsch" else "EN"

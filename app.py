@@ -504,8 +504,7 @@ if any("recommended" in t for t in proj["topics"].values()):
         st.info("Bitte zuerst „🧩 Hochladen und Themenzuordnung prüfen“ ausführen (auch wenn keine PDFs "
                 "hochzuladen sind). Danach wird „Manuskript erstellen“ freigegeben.")
     with st.form("step2_write"):
-        o1, o2, o3 = st.columns(3)
-        opt_fig = o1.checkbox("Abbildungen automatisch auswählen", value=True)
+        o2, o3 = st.columns(2)
         opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
         opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (2–3 je Gruppe)",
@@ -536,7 +535,7 @@ if any("recommended" in t for t in proj["topics"].values()):
         llm = get_llm(float(opt_budget))
         if llm:
             run_with_status("Manuskript wird erstellt", lambda log: pipeline.run_manuscript(llm, proj, log, {
-                "figures": opt_fig, "sota": opt_sota, "style": opt_style, "trial": opt_trial,
+                "sota": opt_sota, "style": opt_style, "trial": opt_trial,
                 "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
                 "reshorten": opt_reshorten}), llm)
 
