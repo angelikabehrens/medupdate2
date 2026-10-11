@@ -126,11 +126,12 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
     chapter = (proj["toc"] or {}).get("chapter_title", "")
     rules = proj.get("rules") or {}
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
+    window = proj.get("search_window")  # manuell eingestellt; bei Änderung werden die Themen neu gesucht
     todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True)
-            and ("recommended" not in t or t.get("n_candidates") == 0)]
+            and ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window))]
 
     def work(t):
-        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n)
+        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window)
 
     for tid, res in _parallel(todo, work, log, "Literaturempfehlung").items():
         if isinstance(res, Exception):
@@ -138,6 +139,7 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
             proj["topics"][tid]["rec_error"] = f"{type(res).__name__}: {res}"
             continue
         proj["topics"][tid].pop("rec_error", None)
+        proj["topics"][tid].pop("selected", None)  # alte Auswahl passt nicht zur neuen Trefferliste
         proj["records"].update(res.pop("records"))
         proj["topics"][tid].update(res)
 

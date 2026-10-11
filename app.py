@@ -8,6 +8,7 @@ Zwei Schritte für die Nutzerin bzw. den Nutzer:
    Literaturverzeichnis, Formatierung und formale Prüfung.
 """
 
+import calendar
 import hmac
 import time
 from datetime import date
@@ -142,7 +143,30 @@ with st.form("step1"):
         template_file = st.file_uploader("Manuskript-Formatvorlage", type=["docx"])
     with c3:
         guide_file = st.file_uploader("Hinweise für Autoren", type=["docx", "pdf", "txt"])
-    go1 = st.form_submit_button("🔍 Literaturempfehlung und Leitlinienrecherche starten")
+    b_win, b_go = st.columns([1, 3])
+    with b_win.popover("📅 Suchzeitraum"):
+        _months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+        _years = list(range(date.today().year, date.today().year - 16, -1))
+        _cur = proj.get("search_window")
+        _von = date.fromisoformat(_cur[0]) if _cur else date(date.today().year - 1, date.today().month, 1)
+        _bis = date.fromisoformat(_cur[1]) if _cur else date.today()
+        win_manual = st.checkbox("Zeitraum manuell festlegen", value=bool(_cur),
+                                 help="Ohne Häkchen gilt der Zeitraum aus den Hinweisen für Autoren (sonst 12 Monate).")
+        st.caption("von (Monat-Jahr)")
+        v1, v2 = st.columns(2)
+        von_m = v1.selectbox("Monat von", _months, index=_von.month - 1, label_visibility="collapsed")
+        von_y = v2.selectbox("Jahr von", _years, index=_years.index(_von.year) if _von.year in _years else 0,
+                             label_visibility="collapsed")
+        st.caption("bis (Monat-Jahr)")
+        w1, w2 = st.columns(2)
+        bis_m = w1.selectbox("Monat bis", _months, index=_bis.month - 1, label_visibility="collapsed")
+        bis_y = w2.selectbox("Jahr bis", _years, index=_years.index(_bis.year) if _bis.year in _years else 0,
+                             label_visibility="collapsed")
+    go1 = b_go.form_submit_button("🔍 Literaturempfehlung und Leitlinienrecherche starten")
+
+if proj.get("search_window"):
+    _w = [date.fromisoformat(x) for x in proj["search_window"]]
+    st.caption(f"📅 Suchzeitraum manuell: {_w[0].strftime('%m-%Y')} bis {_w[1].strftime('%m-%Y')}")
 
 if go1:
     llm = get_llm()
@@ -152,6 +176,12 @@ if go1:
         st.warning("Bitte das Inhaltsverzeichnis hochladen.")
     elif llm:
         proj["email"] = email.strip()
+        if win_manual:
+            _last = calendar.monthrange(int(bis_y), int(bis_m))[1]
+            proj["search_window"] = [date(int(von_y), int(von_m), 1).isoformat(),
+                                     date(int(bis_y), int(bis_m), _last).isoformat()]
+        else:
+            proj.pop("search_window", None)
         toc_text = extract_text(toc_file.name, toc_file.read()) if toc_file else ""
         guide_text = extract_text(guide_file.name, guide_file.read()) if guide_file else ""
         template = (template_file.name, template_file.read()) if template_file else None

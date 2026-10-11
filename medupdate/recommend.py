@@ -212,9 +212,18 @@ def select(ranking: dict[str, dict], n_max: int, reserve: int = 3) -> tuple[list
     return chosen, backup
 
 
+def manual_window(window: list[str] | None) -> tuple[date, date] | None:
+    """Manuell eingestellter Suchzeitraum ["JJJJ-MM-TT", "JJJJ-MM-TT"] oder None."""
+    if not window:
+        return None
+    von, bis = (date.fromisoformat(x) for x in window)
+    return (von, bis) if von <= bis else (bis, von)
+
+
 def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str,
-                        n_max: int, log=lambda msg: None) -> dict:
-    von, bis = time_window(rules.get("recency_months", 0))
+                        n_max: int, log=lambda msg: None, window: list[str] | None = None) -> dict:
+    fixed = manual_window(window)
+    von, bis = fixed or time_window(rules.get("recency_months", 0))
     log(f"Suchstrategie für „{topic['title']}“ wird entwickelt…")
     plan = plan_search(llm, topic, chapter, von, bis)
     log(f"PubMed-Suche für „{topic['title']}“…")
@@ -228,7 +237,7 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
         attempts.append({"window": [von.isoformat(), bis.isoformat()], "queries": plan2.get("queries", []),
                          "hits": stats2})
         pmids = list(dict.fromkeys(pmids + more))
-        if len(pmids) < MIN_CANDIDATES:
+        if len(pmids) < MIN_CANDIDATES and not fixed:  # ein manueller Zeitraum wird nicht verlängert
             von2 = bis - (bis - von) * 2
             more, stats3 = collect_candidates(plan2, von2, bis, email)
             attempts.append({"window": [von2.isoformat(), bis.isoformat()], "queries": plan2.get("queries", []),
@@ -242,7 +251,8 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
     candidates = prefilter([records[p] for p in pmids if p in records])
     log(f"{len(candidates)} Kandidaten für „{topic['title']}“ werden bewertet…")
     months = rules.get("recency_months") or 12
-    ranking = rank(llm, topic, plan.get("pico", ""), candidates, f"der letzten {months} Monate") if candidates else {}
+    period = (f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}" if fixed else f"der letzten {months} Monate")
+    ranking = rank(llm, topic, plan.get("pico", ""), candidates, period) if candidates else {}
     chosen, backup = select(ranking, n_max)
     return {
         "plan": plan, "window": [von.isoformat(), bis.isoformat()], "query_hits": stats, "attempts": attempts,

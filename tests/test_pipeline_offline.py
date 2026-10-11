@@ -443,6 +443,22 @@ def test_sota_choice():
     assert sota_topics(["A", "B", "C", "D"], topics, counts, {"A": 70, "B": 80, "C": 80}) == ["C", "D"]
 
 
+def test_manual_window():
+    from datetime import date
+    assert recommend.manual_window(["2025-03-01", "2026-02-28"]) == (date(2025, 3, 1), date(2026, 2, 28))
+    assert recommend.manual_window(None) is None
+    seen = []
+    orig = recommend.collect_candidates
+    recommend.collect_candidates = lambda plan, von, bis, email: (seen.append((von, bis)) or ([], {}))
+    try:
+        res = recommend.recommend_for_topic(FakeLLM(), {"title": "Thema Eins"}, "Gastro", {}, "x@y.z", 6,
+                                            window=["2025-03-01", "2026-02-28"])
+    finally:
+        recommend.collect_candidates = orig
+    assert set(seen) == {(date(2025, 3, 1), date(2026, 2, 28))}, "manueller Zeitraum wird nicht verlängert"
+    assert res["window"] == ["2025-03-01", "2026-02-28"]
+
+
 def test_split_intro():
     from medupdate.appraisal import split_intro
     ft = ("Title\nAbstract\nShort.\nIntroduction\nVarices bleed often [1]. Therapy is standard [2].\n"
@@ -478,6 +494,7 @@ if __name__ == "__main__":
     test_outline_levels()
     test_repeated_citations()
     test_split_intro()
+    test_manual_window()
     test_sota_choice()
     test_sota_trailing_note()
     test_full_pipeline()
