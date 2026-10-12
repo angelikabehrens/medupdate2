@@ -536,8 +536,8 @@ def kurznachricht_prompt(full_text: str, sprache_kw: str, abstract_text: str = "
 folgenden kritischen Würdigung eine KURZNACHRICHT auf {ziel_sprache} Sprache.
 
 AUFBAU – ausschließlich Fließtext in EINEM Absatz, höchstens 3 Sätze:
-- Satz 1: Studienziel und Studiendesign in einem Satz. Die Anzahl der eingeschlossenen Patientinnen und \
-Patienten (bzw. Teilnehmenden) muss darin genannt werden.
+- Satz 1: Studienziel und Studiendesign in einem Satz. Die Anzahl der eingeschlossenen Patienten \
+(bzw. Teilnehmer) muss darin genannt werden.
 - Danach (Satz 2, höchstens Satz 3): AUSSCHLIESSLICH die Hauptaussage der Studie. Nichts sonst – keine \
 Nebenbefunde, keine Methodendetails, keine Einordnung in andere Literatur, keine Empfehlungen.
 
@@ -717,12 +717,19 @@ zuungunsten der Intervention verschieben, und stärkt oder schwächt das die Aus
 Punkte in einem Satz bündeln, statt sie einzeln aufzuzählen.
 STATISTISCHE WÜRDIGUNG IN FESTER FORM: Die Würdigung von Statistik und Validität besteht aus \
 2–3 einfachen, kurzen Sätzen (die wichtigsten Stärken und Schwächen und was sie für das Ergebnis \
-bedeuten), gefolgt von genau einem Satz, der die Qualität der Studie aus statistischer Sicht \
+bedeuten; nur wenn sonst Inhalt verloren ginge, ausnahmsweise 4 Sätze), gefolgt von genau einem Satz, der die Qualität der Studie aus statistischer Sicht \
 beurteilt, z.B. "Aus statistischer Sicht ist die Studie gut belastbar, weil …" oder "Statistisch \
 ist das Ergebnis nur eingeschränkt belastbar, da …". Keine Metabemerkungen über die Quelle \
 ("im Abstract nicht angegeben", "die Rezensentin berechnete"), keine Formulierungen wie "in nicht \
 bestimmbarer Richtung". Abkürzungen beim ersten Auftreten ausschreiben, Zahlen im Format \
 "OR = 1,17; 95%-KI: 1,07–1,28" und Veränderungen als "von X auf Y".
+- Schlussfolgerung der Autoren im Indikativ und in höchstens zwei Sätzen, keine Konjunktivketten \
+("sei … erfordere … seien"), z.B. "Die Autoren folgern: DL verbessert beide Gruppen, schlägt erfahrene \
+Untersucher aber nicht."
+- Keine angehängten Satzfragmente wie ", ein nicht eindeutiges Ergebnis."; jede Aussage als \
+vollständiger Satz.
+- Nicht gendern: generisches Maskulinum ("Patienten", "Untersucher"), keine Sternchen, keine \
+Doppelnennungen.
 
 FAZIT ABWECHSLUNGSREICH: Beginne das Fazit für die Praxis nicht mit einer Standardformel wie "Das \
 Ergebnis ist neu." bzw. "The result is new.", sondern konkret zur Studie, z.B. "Diese Studie zeigt \

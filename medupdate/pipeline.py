@@ -37,7 +37,7 @@ from .references import make_formatter
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 4
+SHORT_VERSION = 5
 
 def new_project() -> dict:
     return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
