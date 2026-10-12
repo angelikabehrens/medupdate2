@@ -330,6 +330,9 @@ Beispieltexte längere Sätze haben. Verschachtelte Sätze in zwei Sätze teilen
 Baseline-Imbalance, Kovariatenadjustierung, explorativ) kurz im Halbsatz erklären oder in allgemein \
 verständliche Worte fassen; bei jeder Limitation sagen, was sie für das Ergebnis bedeutet (in welche \
 Richtung sie es verschieben würde); Stichwortketten nach einem Doppelpunkt in flüssige Sätze auflösen. \
+Die statistische Würdigung in 2–3 einfachen Sätzen, danach genau ein Satz zur Qualität der Studie \
+aus statistischer Sicht (z.B. "Aus statistischer Sicht ist die Studie gut belastbar, weil …"). Keine \
+Metabemerkungen über die Quelle ("im Abstract nicht angegeben"). Fazit im Indikativ. \
 Dabei nichts weglassen und keine neue Bewertung hinzufügen.
 - Gib NUR den überarbeiteten Text aus.
 

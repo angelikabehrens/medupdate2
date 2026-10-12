@@ -715,7 +715,14 @@ Stärken in einem flüssigen Satz zusammenfassen.
 - Mögliche Verzerrungen mit ihrer Richtung erklären: Würden sie das Ergebnis eher zugunsten oder \
 zuungunsten der Intervention verschieben, und stärkt oder schwächt das die Aussage? Gleichgerichtete \
 Punkte in einem Satz bündeln, statt sie einzeln aufzuzählen.
-- Am Ende der Validitätsbewertung ein klarer Satz, wie belastbar das Ergebnis insgesamt ist.
+STATISTISCHE WÜRDIGUNG IN FESTER FORM: Die Würdigung von Statistik und Validität besteht aus \
+2–3 einfachen, kurzen Sätzen (die wichtigsten Stärken und Schwächen und was sie für das Ergebnis \
+bedeuten), gefolgt von genau einem Satz, der die Qualität der Studie aus statistischer Sicht \
+beurteilt, z.B. "Aus statistischer Sicht ist die Studie gut belastbar, weil …" oder "Statistisch \
+ist das Ergebnis nur eingeschränkt belastbar, da …". Keine Metabemerkungen über die Quelle \
+("im Abstract nicht angegeben", "die Rezensentin berechnete"), keine Formulierungen wie "in nicht \
+bestimmbarer Richtung". Abkürzungen beim ersten Auftreten ausschreiben, Zahlen im Format \
+"OR = 1,17; 95%-KI: 1,07–1,28" und Veränderungen als "von X auf Y".
 
 FAZIT ABWECHSLUNGSREICH: Beginne das Fazit für die Praxis nicht mit einer Standardformel wie "Das \
 Ergebnis ist neu." bzw. "The result is new.", sondern konkret zur Studie, z.B. "Diese Studie zeigt \

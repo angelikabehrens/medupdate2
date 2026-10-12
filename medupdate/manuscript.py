@@ -142,7 +142,8 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
 
 
 def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, rankings: dict) -> bytes:
-    """Liste der empfohlenen Publikationen (zum Beschaffen der Volltexte)."""
+    """Liste der empfohlenen bzw. ausgewählten Publikationen (zum Beschaffen der Volltexte).
+    topics: [{"title", "pmids"}] – jede Publikation steht nur einmal in der Liste."""
     doc = Document()
     style_document(doc)
     h = doc.add_paragraph()
@@ -150,17 +151,27 @@ def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, r
     rr.bold = True
     rr.font.size = Pt(14)
     doc.add_paragraph(date.today().strftime("%d.%m.%Y"))
+    seen: set[str] = set()
     for t in topics:
+        pmids = [p for p in dict.fromkeys(t.get("pmids", [])) if p not in seen]
+        seen.update(pmids)
+        if not pmids:
+            continue
         doc.add_heading(t["title"], level=2)
-        for n, pmid in enumerate(t.get("recommended", []), start=1):
+        for n, pmid in enumerate(pmids, start=1):
             rec = records.get(pmid, {})
             it = rankings.get(pmid, {})
             authors = rec.get("authors") or []
             a = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
+            src = f"{rec.get('journal', '')}. {rec.get('year', '')}"
+            if rec.get("volume"):
+                src += f";{rec['volume']}" + (f"({rec['issue']})" if rec.get("issue") else "")
+            if rec.get("pages"):
+                src += f":{rec['pages']}"
             p = doc.add_paragraph()
-            p.add_run(f"{n}. {a}. ")
-            p.add_run(rec.get("title", "")).bold = True
-            p.add_run(f" {rec.get('journal', '')} {rec.get('year', '')}. PMID: {pmid}")
+            p.add_run(f"{n}. {a.rstrip('.')}. ")
+            p.add_run(rec.get("title", "").rstrip(".") + ".").bold = True
+            p.add_run(f" {src.strip()}." + (f" PMID: {pmid}" if pmid.isdigit() else ""))
             if rec.get("doi"):
                 p.add_run(f" · doi:{rec['doi']}")
             if rec.get("is_oa"):
@@ -171,6 +182,9 @@ def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, r
                           f"Bedeutung {it.get('question_importance', '?')} · "
                           f"IF {it.get('journal_impact_factor') or 'k. A.'} · "
                           f"{it.get('study_design', '')}. {it.get('rationale', '')}").italic = True
+    footer = doc.sections[0].footer.paragraphs[0]  # Seitenzahlen
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    add_field(footer, "PAGE")
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

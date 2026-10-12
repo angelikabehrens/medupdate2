@@ -37,7 +37,7 @@ from .references import make_formatter
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 3
+SHORT_VERSION = 4
 
 def new_project() -> dict:
     return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
@@ -262,7 +262,11 @@ def recommendation_docx(proj: dict) -> bytes:
     rankings = {}
     for t in proj["topics"].values():
         rankings.update(t.get("ranking", {}))
-    topics = [t for t in proj["topics"].values() if t.get("enabled", True)]
+    by_topic: dict[str, list[str]] = {}
+    for p, tid in _pub_list(proj):  # aktuelle Auswahl, jede Publikation nur einmal
+        by_topic.setdefault(tid, []).append(p)
+    topics = [{"title": f"{t.get('number', '')} {t['title']}".strip(), "pmids": by_topic.get(tid, [])}
+              for tid, t in proj["topics"].items() if t.get("enabled", True)]
     return build_recommendation_docx((proj["toc"] or {}).get("chapter_title", ""), topics, proj["records"], rankings)
 
 
