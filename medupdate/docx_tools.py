@@ -52,9 +52,9 @@ _SKILL_BOLD_LABELS = [
     "Studie:", "Ergebnisse:", "Schlussfolgerung der Autoren:", "Kommentar:", "Fazit für die Praxis:",
     "Study:", "Results:", "Authors' Conclusion:", "Comment:", "Conclusion for Practice:",
     # Verknüpfungs-Format (Schritt 4B: gemeinsame Würdigung mehrerer Publikationen)
-    "Übersicht der Publikationen", "Publikation 1:", "Publikation 2:", "Publikation 3:",
+    "Übersicht der Publikationen", "Publikation 1:", "Publikation 2:", "Publikation 3:", "Publikation 4:", "Publikation 5:",
     "Einordnung der Verknüpfung", "Kritische Würdigung", "Gemeinsames Fazit",
-    "Overview of the Publications", "Publication 1:", "Publication 2:", "Publication 3:",
+    "Overview of the Publications", "Publication 1:", "Publication 2:", "Publication 3:", "Publication 4:", "Publication 5:",
     "Assessment of the Linkage", "Critical Appraisal", "Joint Conclusion",
 ]
 

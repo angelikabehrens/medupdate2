@@ -225,7 +225,13 @@ def generate_sota_from_intro(llm: LLM, topic: str, pubs: list[tuple[str, str]],
         return None
     raw = llm.text(P.sota_from_intro_prompt(topic, sources, guideline_docs),
                    model=MODEL_MAIN, max_tokens=4000, effort="medium")
+    if "KEINE_EINLEITUNG" in raw:
+        return None
     body, entries = split_sota_response(raw)
+    # Anmerkungen der KI über ihre Quellen gehören nicht in den Text
+    body = " ".join(x for x in split_sentences(body or "")
+                    if not re.match(r"(Hinweis|Anmerkung|Note)\b", x.strip(), re.I)
+                    and not re.search(r"übermittelte[nr]? Text|provided text|enthält nur (den )?Titel", x, re.I))
     if not body:
         return None
     sentences = split_sentences(body)

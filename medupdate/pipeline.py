@@ -37,8 +37,9 @@ from .references import make_formatter
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 7
-GROUP_VERSION = 2  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
+SHORT_VERSION = 8
+MAX_GROUP_SIZE = 5  # gemeinsame Würdigung von bis zu 5 Publikationen (Angelika 2026-10-13)
+GROUP_VERSION = 3  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 
 def new_project() -> dict:
     return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
@@ -472,7 +473,7 @@ def reassign_topics(llm: LLM, proj: dict, log, force: bool = False) -> None:
     groups, used = [], set()
     for g in res.get("same_question", []):
         ids = [p for p in dict.fromkeys(g.get("pub_ids", [])) if p in cur and p not in used]
-        if 2 <= len(ids) <= 3:
+        if 2 <= len(ids) <= MAX_GROUP_SIZE:
             used.update(ids)
             groups.append({"pmids": ids, "question_de": g.get("question_de", "").strip()})
     # Gleiche Fragestellung → gleiches Thema: das Thema der ersten (bzw. vom Nutzer festgelegten) Publikation
@@ -1012,7 +1013,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                     rec = dict(rec, title=d["title_de" if lang == "Deutsch" else "title_en"])
                 block["pubs"].append({"title": rec.get("title", p), "rec": rec, "abstract": abstract,
                                       "recs": [proj["records"].get(m, {}) for m in members],
-                                      "lines": [l for l in text.split("\n") if l.strip()], "literature": lit,
+                                      "lines": [_strip_stray_label(l) for l in text.split("\n") if l.strip()],
+                                      "literature": lit,
                                       "figure": None})
             blocks.append(block)
         raw = build_docx(tr(title), blocks, lang)
@@ -1031,6 +1033,16 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             proj["outputs"]["befunde"] = befunde
             proj["outputs"]["pruefprotokoll"] = build_pruefprotokoll_docx(befunde)
     log("Fertig.")
+
+
+_STRAY_LABEL = re.compile(r"^\s*(\*\*)?(State of the Art|Stand der Forschung|Hintergrund|Background)\s*:\s*(\*\*)?\s*",
+                          re.I)
+
+
+def _strip_stray_label(line: str) -> str:
+    """Ein von der KI erfundenes Label wie „State of the art:“ mitten in einer Würdigung entfernen; der
+    State of the Art steht nur einmal je Hauptabschnitt vor dem Thema (Wunsch der Autorin, 2026-10-13)."""
+    return _STRAY_LABEL.sub("", line)
 
 
 def _pipeline_findings(proj: dict, ready: list) -> list[dict]:
@@ -1261,7 +1273,7 @@ GROUP_SCHEMA = obj({"groups": arr(obj({"pub_ids": arr(STR), "question_de": STR, 
 
 
 def find_groups(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[dict]:
-    """Publikationen eines Themas mit nahezu gleicher Fragestellung (je Gruppe 2–3)."""
+    """Publikationen eines Themas mit gleicher Fragestellung (je Gruppe 2 bis MAX_GROUP_SIZE)."""
     rk = proj["topics"][tid].get("ranking", {})
     pubs = [{"id": p, "title": proj["records"].get(p, {}).get("title", p),
              "question": rk.get(p, {}).get("question_key", ""),
@@ -1272,7 +1284,7 @@ def find_groups(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[dict]:
     out, used = [], set()
     for g in res.get("groups", []):
         ids = [p for p in dict.fromkeys(g.get("pub_ids", [])) if p in pmids and p not in used]
-        if 2 <= len(ids) <= 3:
+        if 2 <= len(ids) <= MAX_GROUP_SIZE:
             used.update(ids)
             out.append({"pmids": ids, "question_de": g.get("question_de", "").strip(),
                         "question_en": g.get("question_en", "").strip()})

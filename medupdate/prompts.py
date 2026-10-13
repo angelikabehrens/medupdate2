@@ -727,6 +727,8 @@ Untersucher aber nicht."
 vollständiger Satz.
 - Nicht gendern: generisches Maskulinum ("Patienten", "Untersucher"), keine Sternchen, keine \
 Doppelnennungen.
+- Nur die vorgegebenen Labels verwenden; keine zusätzlichen wie "State of the art:" oder \
+"Hintergrund:". Die Einordnung in die bisherige Evidenz steht ohne eigenes Label im Text.
 - Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser multizentrischen Studie …", \
 "Diese randomisierte Studie …" statt "In einer … Studie"). Bei Metaanalysen und Reviews den Einstieg \
 abwechseln, nicht durchgehend so.

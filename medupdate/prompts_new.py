@@ -212,7 +212,8 @@ dieselbe Intervention gegen denselben Vergleich bei derselben Erkrankung gilt al
 Fragestellung, auch wenn sich die Subgruppen unterscheiden (z.B. ARMA gegen Sham bei PPI-responsiver und \
 bei PPI-refraktärer GERD); die Unterschiede werden dann in der gemeinsamen Würdigung herausgearbeitet), \
 werden später gemeinsam gewürdigt. Sie MÜSSEN demselben Thema zugeordnet werden. Nenne sie in \
-"same_question" (2 oder 3 je Gruppe, jede Publikation höchstens in einer Gruppe; dasselbe Thema allein \
+"same_question" (2 bis 5 je Gruppe, gleiche Kriterien wie bei Verfahren derselben Indikation, auch mit \
+unterschiedlichem Studiendesign, jede Publikation höchstens in einer Gruppe; dasselbe Thema allein \
 reicht nicht, im Zweifel keine Gruppe).
 - topic_id "" (= Abschnitt „Varia“) ist nur für Publikationen mit dem Vermerk [hochgeladen] erlaubt, die \
 zu keinem Thema wirklich passen. Alle anderen bekommen ein Thema aus der Liste.
@@ -470,7 +471,9 @@ angegeben. Fehlende Angaben weglassen, nichts ergänzen.
 
 Ausgabe: die Überschrift „State of the Art“, darunter der Fließtext, darunter die Überschrift \
 „References“ mit der nummerierten Liste. Nach der Liste folgt nichts mehr: keine Hinweise, \
-Vorbehalte oder Prüfbitten.
+Vorbehalte oder Prüfbitten. Schreibe nie über die Quellen selbst (z.B. „Der übermittelte Text enthält \
+nur …“). Enthält keine der Publikationen eine echte Einleitung und gibt es keine Leitlinie, gib nur \
+das Wort KEINE_EINLEITUNG aus.
 
 {pubs}{gl}"""
 
@@ -512,17 +515,24 @@ def group_prompt(topic: str, pubs: list[dict], hints: list[list[str]] | None = N
         ps += ("\n\nBei der Prüfung der Themenzuordnung wurden diese Publikationen als nahezu gleiche Fragestellung "
                "erkannt (bitte bestätigen oder verwerfen): " + "; ".join(" + ".join(h) for h in hints))
     return f"""Du erhältst die Publikationen, die im Manuskript zum Thema „{topic}“ besprochen werden. Prüfe, \
-ob zwei oder drei davon nahezu dieselbe klinische Fragestellung bearbeiten, z.B. verschiedene \
-endoskopische Techniken zur Therapie derselben Indikation oder zwei Studien unterschiedlicher \
-Evidenzstufe zur selben Frage. Solche Publikationen werden im Manuskript gemeinsam gewürdigt statt \
+ob mehrere davon dieselbe klinische Fragestellung bearbeiten, z.B. verschiedene \
+endoskopische Techniken zur Therapie derselben Indikation oder Studien unterschiedlicher Evidenzstufe \
+zur selben Frage. Solche Publikationen werden im Manuskript gemeinsam gewürdigt statt \
 einzeln nacheinander.
 
 Regeln:
-- Eine Gruppe hat 2 oder 3 Publikationen; jede Publikation gehört höchstens zu einer Gruppe.
-- Nur bei wirklich nahezu gleicher Fragestellung (gleiche Population/Indikation und vergleichbare \
-Endpunkte). Auch dieselbe Intervention gegen denselben Vergleich bei derselben Erkrankung gilt als gleiche \
-Fragestellung, auch wenn sich die Subgruppen unterscheiden (z.B. ARMA gegen Sham bei PPI-responsiver und \
-bei PPI-refraktärer GERD); die Unterschiede werden dann in der gemeinsamen Würdigung herausgearbeitet. Dasselbe Thema allein reicht nicht. Im Zweifel keine Gruppe.
+- Eine Gruppe hat 2 bis 5 Publikationen; jede Publikation gehört höchstens zu einer Gruppe. Bei mehr \
+als 5 Publikationen zu einer Frage bilde Gruppen nach Teilfragen (z.B. EUS-GE gegen Chirurgie und EUS-GE \
+gegen Stent).
+- Gemeinsam gewürdigt werden Publikationen zur selben klinischen Frage bzw. zum selben Verfahren bei \
+derselben Indikation, auch mit unterschiedlichem Design (RCT, Kohorte, Metaanalyse, Kostenanalyse) oder \
+unterschiedlichen Vergleichsverfahren. Beispiele: ARMA gegen Sham bei PPI-responsiver und bei \
+PPI-refraktärer GERD; verschiedene endoskopische, endosonographische und endovaskuläre Therapien von \
+Magenvarizen; RCTs, Metaanalysen und Kosten-Nutzen-Analysen zur EUS-gesteuerten Gastroenterostomie bei \
+maligner Magenausgangsstenose; zwei Registerstudien zum selben Endpunkt. Die Unterschiede werden in der \
+gemeinsamen Würdigung herausgearbeitet.
+- Nicht gemeinsam: Publikationen, die nur dasselbe Organ oder Themengebiet teilen, aber verschiedene \
+Indikationen oder klinische Fragen behandeln.
 - "question_de" / "question_en": die gemeinsame Fragestellung als kurzer Titel (höchstens ca. 12 Wörter).
 - Gibt es keine solche Gruppe, gib eine leere Liste zurück.
 
