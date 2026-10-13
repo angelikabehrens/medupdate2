@@ -611,6 +611,20 @@ def test_fazit_and_headings():
     assert de["Esophagus"] == "Ösophagus" and de["Stomach"] == "Magen"
 
 
+def test_comment_box():
+    from docx import Document
+    from medupdate.docx_tools import is_shaded, render_line_with_bold_label
+    doc = Document()
+    box = False
+    for line in ["Studie: A.", "Kommentar: B.", "Weiter.", "Fazit für die Praxis: C."]:
+        box = render_line_with_bold_label(doc, line, box)
+    ps = doc.paragraphs
+    assert not is_shaded(ps[0]) and ps[0].runs[0].underline, "Studie: unterstrichen, ohne Kasten"
+    assert all(is_shaded(p) for p in ps[1:]), "Kommentar, Folgeabsatz und Fazit im grauen Kasten"
+    assert ps[1].runs[0].bold and not ps[1].runs[0].underline, "Kommentar: fett, nicht unterstrichen"
+    assert ps[3].runs[0].bold and not ps[3].runs[0].underline, "Fazit: fett, nicht unterstrichen"
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_direct_upload()
@@ -628,4 +642,5 @@ if __name__ == "__main__":
     test_sota_choice()
     test_sota_trailing_note()
     test_full_pipeline()
+    test_comment_box()
     print("OK")

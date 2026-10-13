@@ -59,23 +59,56 @@ _SKILL_BOLD_LABELS = [
 ]
 
 
-def render_line_with_bold_label(doc: Document, line: str) -> None:
+# Labels, deren Absatz (samt Folgeabsätzen ohne eigenes Label) wie in der med-update-Vorlage im grauen
+# Kasten („BlockText“) steht, Label fett statt unterstrichen (Wunsch der Autorin, 2026-10-13)
+BOX_LABELS = ("Kommentar:", "Fazit für die Praxis:", "Comment:", "Conclusion for Practice:")
+BOX_FILL = "D9D9D9"
+
+
+def shade_paragraph(p, fill: str = BOX_FILL) -> None:
+    """Hinterlegt einen Absatz grau (wie die Formatvorlage „BlockText“)."""
+    ppr = p._p.get_or_add_pPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill)
+    ppr.append(shd)
+
+
+def is_shaded(p) -> bool:
+    ppr = p._p.pPr
+    return ppr is not None and ppr.find(qn("w:shd")) is not None
+
+
+def render_line_with_bold_label(doc: Document, line: str, in_box: bool = False) -> bool:
     """Fügt eine Zeile der Schritt-7-Kürzung ein und unterstreicht ein bekanntes Label
-    (z.B. 'Fazit für die Praxis:') am Zeilenanfang, falls vorhanden – der Rest der
-    Zeile bleibt normal formatiert. Entfernt dabei auch übrig gebliebene Markdown-
-    Sternchen ('**') irgendwo in der Zeile, nicht nur am Rand."""
+    (z.B. 'Studie:') am Zeilenanfang, falls vorhanden – der Rest der Zeile bleibt normal
+    formatiert. „Kommentar:“ und „Fazit für die Praxis:“ werden fett gesetzt und der Absatz grau
+    hinterlegt; Folgeabsätze ohne Label bleiben im Kasten (in_box). Entfernt dabei auch übrig
+    gebliebene Markdown-Sternchen ('**') irgendwo in der Zeile, nicht nur am Rand.
+    Gibt zurück, ob der nächste Absatz ohne Label noch im grauen Kasten steht."""
     clean_line = re.sub(r"\*\*", "", line).strip("* ").strip()
     matched_label = None
     for label in _SKILL_BOLD_LABELS:
         if clean_line.lower().startswith(label.lower()):
             matched_label = clean_line[: len(label)]
             break
+    box = any(matched_label and matched_label.lower() == b.lower() for b in BOX_LABELS)
+    if matched_label is None:
+        box = in_box
     p = doc.add_paragraph()
     if matched_label:
-        p.add_run(matched_label).underline = True
+        run = p.add_run(matched_label)
+        if box:
+            run.bold = True
+        else:
+            run.underline = True
         p.add_run(clean_line[len(matched_label):])
     else:
         p.add_run(clean_line)
+    if box:
+        shade_paragraph(p)
+    return box
 
 
 # Zitatmarker im Fließtext: "(3)", "(2,4)" oder "[3]" – aber NICHT direkt hinter einem
@@ -481,8 +514,15 @@ def copy_document_content_into_template(
             i += 1
             continue
 
-        # Normaler Fließtext-Absatz: Formatierung (fett/kursiv/unterstrichen) übernehmen.
-        new_p = template_doc.add_paragraph()
+        # Normaler Fließtext-Absatz: Formatierung (fett/kursiv/unterstrichen) übernehmen. Grau
+        # hinterlegte Absätze (Kommentar, Fazit für die Praxis) erhalten die Formatvorlage „BlockText“.
+        if is_shaded(para):
+            new_p = template_doc.add_paragraph(style="BlockText") if "BlockText" in template_style_names \
+                else template_doc.add_paragraph()
+            if "BlockText" not in template_style_names:
+                shade_paragraph(new_p)
+        else:
+            new_p = template_doc.add_paragraph()
         for run in para.runs:
             new_run = new_p.add_run(run.text)
             new_run.bold = run.bold

@@ -101,10 +101,11 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
                 doc.add_paragraph(short_citation(pub["rec"], [1]))
             if pub.get("abstract"):
                 doc.add_paragraph(pub["abstract"])
+            in_box = False
             for line in pub["lines"]:
                 line = re.sub(r"^#+\s*", "", line.strip())
                 if line and not re.fullmatch(r"[-*_—―]{3,}", line):
-                    render_line_with_bold_label(doc, line)
+                    in_box = render_line_with_bold_label(doc, line, in_box)
             if pub.get("literature"):
                 doc.add_paragraph("")
                 lp = doc.add_paragraph()
