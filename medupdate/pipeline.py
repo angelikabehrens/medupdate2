@@ -894,15 +894,22 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     # Neu erstellen, wenn noch keiner da ist oder ein älterer (per Websuche) durch einen aus der
     # Einleitung der folgenden Publikation ersetzt werden kann
     todo = [(t, t) for t in sota_ids if not proj["topics"][t].get("sota_en")
-            or (proj["topics"][t]["sota_en"].get("source") != "intro" and first_pub(t))]
+            or (proj["topics"][t]["sota_en"].get("source") != A.SOTA_SOURCE and first_pub(t))]
 
     def sota(tid):
         title = proj["topics"][tid]["title"]
         en = None
-        p = first_pub(tid)
-        if p:
-            en = A.generate_sota_from_intro(llm, title, proj["records"].get(p, {}).get("title", ""),
-                                            proj["pubs"][p]["full_text"])
+        if first_pub(tid):
+            pubs = []  # alle Publikationen des Themas mit Volltext, in Manuskript-Reihenfolge
+            for q, tt in ready:
+                if tt != tid:
+                    continue
+                for m in proj["pubs"][q].get("group") or [q]:
+                    if proj["pubs"].get(m, {}).get("full_text") and m not in [x for x, _ in pubs]:
+                        pubs.append((m, proj["pubs"][m]["full_text"]))
+            en = A.generate_sota_from_intro(
+                llm, title, [(proj["records"].get(m, {}).get("title", ""), ft) for m, ft in pubs],
+                _guideline_docs(proj, tid, title, per_doc=4000, total=8000))
         if en is None:
             en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=5000, total=12000))
         return {"sota_en": en, "sota_de": A.translate_sota(llm, en)}

@@ -208,13 +208,22 @@ def split_intro(full_text: str) -> tuple[str, str]:
     return intro.strip()[:9000], refs.strip()[:20000]
 
 
-def generate_sota_from_intro(llm: LLM, topic: str, pub_title: str, full_text: str) -> dict | None:
-    """State of the Art aus der Einleitung der ersten folgenden Publikation (3–5 Kernaussagen als
-    Hinleitung, mit den dort zitierten Quellen). Ohne Websuche. None, wenn keine Einleitung erkennbar."""
-    intro, refs = split_intro(full_text or "")
-    if len(intro) < 400:
+SOTA_SOURCE = "intro_v2"  # Trichter-Aufbau aus allen Einleitungen des Themas (Angelika 2026-10-13)
+
+
+def generate_sota_from_intro(llm: LLM, topic: str, pubs: list[tuple[str, str]],
+                             guideline_docs: list[tuple[str, str]] | None = None) -> dict | None:
+    """State of the Art als Trichter (Gesamtthema → Entwicklung der Verfahren → offene Frage) aus den
+    Einleitungen der Publikationen des Themas (pubs: [(Titel, Volltext)]) und den Leitlinien, mit den
+    dort zitierten Quellen. Ohne Websuche. None, wenn keine Einleitung erkennbar."""
+    sources = []
+    for title, full_text in pubs[:4]:
+        intro, refs = split_intro(full_text or "")
+        if len(intro) >= 400:
+            sources.append((title, intro[:6000], (refs or "")[:12000]))
+    if not sources:
         return None
-    raw = llm.text(P.sota_from_intro_prompt(topic, pub_title, intro, refs or "(nicht verfügbar)"),
+    raw = llm.text(P.sota_from_intro_prompt(topic, sources, guideline_docs),
                    model=MODEL_MAIN, max_tokens=4000, effort="medium")
     body, entries = split_sota_response(raw)
     if not body:
@@ -223,7 +232,7 @@ def generate_sota_from_intro(llm: LLM, topic: str, pub_title: str, full_text: st
     if len(sentences) > 5:
         body = " ".join(sentences[:5])
     body, literature = finalize_sota_citations(body, entries)
-    return {"text": body, "literature": literature, "source": "intro"}
+    return {"text": body, "literature": literature, "source": SOTA_SOURCE}
 
 
 def generate_sota(llm: LLM, thema_text: str, sprache_kw: str, guideline_docs: list[tuple[str, str]]) -> dict:

@@ -393,41 +393,56 @@ Text:
 {text}"""
 
 
-def sota_from_intro_prompt(topic: str, pub_title: str, intro: str, references: str) -> str:
+def sota_from_intro_prompt(topic: str, sources: list[tuple[str, str, str]],
+                           guidelines: list[tuple[str, str]] | None = None) -> str:
+    """sources: [(Titel, Einleitung, Literaturverzeichnis)] aller Publikationen des Themas mit Volltext."""
+    pubs = "\n\n".join(
+        f"=== Publikation {i}: „{t}“ ===\nEinleitung der Publikation:\n{intro}\n\n"
+        f"Literaturverzeichnis dieser Publikation (Auszug):\n{refs or '(nicht verfügbar)'}"
+        for i, (t, intro, refs) in enumerate(sources, start=1))
+    gl = ""
+    if guidelines:
+        gl = "\n\nAktuelle Leitlinien zum Thema (Auszüge):\n\n" + "\n\n".join(
+            f"--- {n} ---\n{t}" for n, t in guidelines)
     return f"""Erstelle für das Thema „{topic}“ einen kurzen Abschnitt „State of the Art“ auf englischer \
-Sprache. Er steht im Manuskript direkt vor der Besprechung der folgenden Publikation und leitet auf \
-das Thema hin.
+Sprache. Er steht im Manuskript direkt vor der Besprechung der Publikationen dieses Themas und führt \
+wie ein Trichter vom Gesamtthema zu ihrer gemeinsamen Fragestellung hin.
 
-Grundlage ist die Einleitung dieser Publikation („{pub_title}“). Wähle daraus 3 bis 5 Kernaussagen, \
-die den Leser auf das Thema hinführen und es in den Gesamtkontext einordnen: aktuelle Bedeutung des \
-Problems, etablierter Standard bzw. Wissensstand und die offene Frage oder Evidenzlücke, an der die \
-Studie ansetzt.
+Aufbau (3 bis 5 Sätze):
+1. Ein Satz zum Gesamtthema, wie es die Überschrift nennt (z.B. die Erkrankung): Bedeutung und \
+etablierter Standard der Diagnostik bzw. Therapie. Noch nicht das Verfahren der Studien.
+2. Ein bis zwei Sätze zur Entwicklung der letzten Jahre bei den Verfahren bzw. Strategien dieses \
+Themas: Welche Ansätze gibt es, hat sich eines durchgesetzt oder wird es in Leitlinien empfohlen, wo \
+liegen ihre Grenzen? Beschreibe das Feld, nicht nur das Verfahren der ersten Publikation.
+3. Ein Satz zur offenen Frage bzw. Evidenzlücke, so allgemein formuliert, dass er zu ALLEN unten \
+genannten Publikationen passt.
 
 Regeln:
-- 3 bis 5 Sätze, insgesamt ca. 70 bis 110 Wörter, jeder Satz höchstens ca. 30 Wörter.
-- Formuliere die Aussagen eigenständig und fachsprachlich um; übernimm keine Sätze wörtlich.
-- Nimm keine Ergebnisse oder Schlussfolgerungen der Studie vorweg und nenne die Studie selbst nicht.
-- Zahlen nur, wenn sie so in der Einleitung stehen. Erfinde nichts hinzu.
+- Insgesamt ca. 70 bis 120 Wörter, jeder Satz höchstens ca. 30 Wörter.
+- Grundlage sind ausschließlich die Einleitungen der Publikationen und die Leitlinien unten. Jede \
+Aussage muss dort belegt sein. Ob sich ein Verfahren durchgesetzt hat, nur schreiben, wenn eine \
+Einleitung oder Leitlinie das so sagt; sonst die Aussage weglassen.
+- Formuliere eigenständig und fachsprachlich um; übernimm keine Sätze wörtlich.
+- Nimm keine Ergebnisse oder Schlussfolgerungen der Studien vorweg und nenne die Studien selbst nicht.
+- Zahlen nur, wenn sie so in einer Einleitung oder Leitlinie stehen. Erfinde nichts hinzu.
 - Arzneimittel nur mit Wirkstoffnamen. Keine Markdown-Formatierung.
 
 Literaturverweise:
-- Belege die Aussagen mit den Quellen, die die Einleitung an dieser Stelle selbst zitiert, als \
-nummerierte Klammerverweise vor dem Satzpunkt („… etabliert (1).“), neu nummeriert ab 1 in der \
-Reihenfolge des ersten Auftretens. Höchstens 5 Quellen; mehrere Quellen zu einer Aussage als „(1,2)“.
-- Übernimm die Angaben dieser Quellen aus dem Literaturverzeichnis der Publikation (unten). Format: \
-Nachname Initialen, Nachname Initialen, Nachname Initialen. Titel. Journal. Jahr;Band:Seiten. Bei mehr als \
-drei Autoren die ersten drei, dann „et al.“. Fehlende Angaben weglassen, nichts ergänzen.
-- Lässt sich eine Quelle im Literaturverzeichnis nicht eindeutig finden, formuliere die Aussage ohne Verweis.
+- Belege die Aussagen mit den Quellen, die die Einleitungen an dieser Stelle selbst zitieren, oder mit \
+den Leitlinien, als nummerierte Klammerverweise vor dem Satzpunkt („… etabliert (1).“), neu nummeriert \
+ab 1 in der Reihenfolge des ersten Auftretens. Höchstens 5 Quellen; mehrere Quellen zu einer Aussage \
+als „(1,2)“.
+- Übernimm die Angaben aus dem Literaturverzeichnis der jeweiligen Publikation. Format: Nachname \
+Initialen, Nachname Initialen, Nachname Initialen. Titel. Journal. Jahr;Band:Seiten. Bei mehr als drei \
+Autoren die ersten drei, dann „et al.“. Eine Leitlinie mit Fachgesellschaft, Titel und Jahr, wie oben \
+angegeben. Fehlende Angaben weglassen, nichts ergänzen.
+- Lässt sich eine Quelle nicht eindeutig finden, formuliere die Aussage ohne Verweis.
 
 Ausgabe: die Überschrift „State of the Art“, darunter der Fließtext, darunter die Überschrift \
 „References“ mit der nummerierten Liste. Nach der Liste folgt nichts mehr: keine Hinweise, \
 Vorbehalte oder Prüfbitten.
 
-Einleitung der Publikation:
-{intro}
-
-Literaturverzeichnis der Publikation (Auszug):
-{references}"""
+{pubs}{gl}"""
 
 
 def own_refs_prompt(manuscripts: list[tuple[str, str]], pubs: list[dict], max_refs: int) -> str:
