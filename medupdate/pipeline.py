@@ -37,7 +37,8 @@ from .references import make_formatter
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 5
+SHORT_VERSION = 6
+GROUP_VERSION = 2  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 
 def new_project() -> dict:
     return {"version": 1, "id": uuid.uuid4().hex[:12], "created": date.today().isoformat(), "email": "", "toc": None, "rules": None,
@@ -426,7 +427,8 @@ def move_pub(proj: dict, p: str, dst: str) -> None:
 
 
 def _reassign_key(proj: dict) -> list:
-    return sorted(current_topics(proj)) + sorted(f"{p}={t}" for p, t in (proj.get("topic_manual") or {}).items())
+    return ([f"v{GROUP_VERSION}"] + sorted(current_topics(proj))
+            + sorted(f"{p}={t}" for p, t in (proj.get("topic_manual") or {}).items()))
 
 
 def reassign_topics(llm: LLM, proj: dict, log, force: bool = False) -> None:
@@ -1247,7 +1249,7 @@ def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> lis
         t = proj["topics"][tid]
         if len(pmids) < 2:
             continue
-        key = sorted(pmids)
+        key = [f"v{GROUP_VERSION}"] + sorted(pmids)
         if t.get("groups_for") != key:
             log(f"Gemeinsame Fragestellungen in „{t['title']}“ werden geprüft…")
             try:

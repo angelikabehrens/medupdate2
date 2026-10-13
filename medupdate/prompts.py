@@ -280,11 +280,6 @@ Ereignisse darf nicht unterstellt werden, wenn die Publikation tatsächlich eine
 null angibt.
 * Gibt es relevante Unsicherheiten hinsichtlich Nutzen und Schaden?
 * Gibt es praktische, organisatorische oder ökonomische Einschränkungen?
-* Gibt es eine konkrete, unmittelbar umsetzbare Alternativmaßnahme (z. B. Substitution statt vollständiger \
-Elimination, Dosisreduktion, ein anderes Produkt oder Vorgehen), die sich direkt aus den Studiendaten oder \
-dem in Abschnitt 4 recherchierten Kontext ableiten lässt – nicht nur eine allgemeine Grundhaltung wie \
-„Reduktion" oder „psychologische Unterstützung"? Nenne sie konkret, wenn die Evidenz sie trägt; erfinde \
-keine, wenn sie nicht belegt ist.
 * Wie verhalten sich die Ergebnisse zu aktuellen Leitlinienempfehlungen?
 * Würden die Ergebnisse das klinische Vorgehen tatsächlich verändern oder liefern sie zunächst nur zusätzliche Evidenz?
 
@@ -707,9 +702,11 @@ klinisch tätige Leserinnen und Leser nachvollziehbar:
 - Sage bei jeder wichtigen Stärke oder Limitation in einfachen Worten, was sie für das Ergebnis \
 bedeutet. Beispiel: statt "Zentrale Limitation ist die Impräzision der Schätzung" lieber "Die Studie \
 war zu klein, um einen moderaten Nutzen sicher nachzuweisen oder auszuschließen".
-- Fachbegriffe wie Impräzision, Entblindung, Lernkurveneffekt, Baseline-Imbalance, \
-Kovariatenadjustierung, explorativ, Sham-Response nur mit kurzer Erklärung im Halbsatz verwenden, sonst \
-durch allgemein verständliche Worte ersetzen.
+- In der Medizin geläufige Begriffe wie Signifikanz, Randomisierung, verdeckte Randomisierung, \
+Verblindung, Intention-to-treat, Konfidenzintervall, Placebo, Sham, Regression zur Mitte oder \
+Adjustierung NICHT erklären. Nur selten verwendete Begriffe (z.B. Impräzision, Entblindung, \
+Baseline-Imbalance, Kovariatenadjustierung) kurz im Halbsatz erklären oder durch einfache Worte \
+ersetzen. Keine Erklärungen mit "also …" oder in Klammern für geläufige Begriffe.
 - Keine Stichwortketten nach einem Doppelpunkt ("hoch: verdeckte Randomisierung, Verblindung, …"); \
 Stärken in einem flüssigen Satz zusammenfassen.
 - Mögliche Verzerrungen mit ihrer Richtung erklären: Würden sie das Ergebnis eher zugunsten oder \
@@ -730,6 +727,14 @@ Untersucher aber nicht."
 vollständiger Satz.
 - Nicht gendern: generisches Maskulinum ("Patienten", "Untersucher"), keine Sternchen, keine \
 Doppelnennungen.
+- Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser multizentrischen Studie …", \
+"Diese randomisierte Studie …" statt "In einer … Studie"). Bei Metaanalysen und Reviews den Einstieg \
+abwechseln, nicht durchgehend so.
+- Grammatik prüfen, besonders die Kongruenz von Subjekt und Verb in Relativsätzen ("63 Erwachsene \
+…, die auf PPI ansprachen", nicht "ansprach").
+- Keine Hinweise auf alternative Diagnostik- oder Therapieoptionen, die nicht Gegenstand der Studie \
+sind (z.B. "Für Patienten, die … möchten, bleiben etablierte Optionen …"); solche Passagen streichen, \
+auch wenn sie in der Vorlage stehen.
 
 FAZIT ABWECHSLUNGSREICH: Beginne das Fazit für die Praxis nicht mit einer Standardformel wie "Das \
 Ergebnis ist neu." bzw. "The result is new.", sondern konkret zur Studie, z.B. "Diese Studie zeigt \

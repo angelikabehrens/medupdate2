@@ -207,7 +207,10 @@ Resektion (z.B. Technikvergleich, Resektionsgerät, En-bloc-Rate), gehört sie z
 - Bevorzuge das spezifischste passende Thema. Die bisherige Zuordnung nur ändern, wenn ein anderes Thema \
 klar besser passt.
 - Publikationen, die nahezu dieselbe klinische Fragestellung bearbeiten (gleiche Population/Indikation, \
-vergleichbare Endpunkte, z.B. verschiedene endoskopische Techniken zur Therapie derselben Indikation), \
+vergleichbare Endpunkte, z.B. verschiedene endoskopische Techniken zur Therapie derselben Indikation; \
+dieselbe Intervention gegen denselben Vergleich bei derselben Erkrankung gilt als gleiche \
+Fragestellung, auch wenn sich die Subgruppen unterscheiden (z.B. ARMA gegen Sham bei PPI-responsiver und \
+bei PPI-refraktärer GERD); die Unterschiede werden dann in der gemeinsamen Würdigung herausgearbeitet), \
 werden später gemeinsam gewürdigt. Sie MÜSSEN demselben Thema zugeordnet werden. Nenne sie in \
 "same_question" (2 oder 3 je Gruppe, jede Publikation höchstens in einer Gruppe; dasselbe Thema allein \
 reicht nicht, im Zweifel keine Gruppe).
@@ -326,15 +329,18 @@ Autoren:", "Kommentar:", "Fazit für die Praxis:") bleiben unverändert erhalten
 - Länge ungefähr gleich (±10 %).
 - Kurze, klare Sätze (möglichst höchstens 20–25 Wörter), keine Schachtelsätze, auch wenn die \
 Beispieltexte längere Sätze haben. Verschachtelte Sätze in zwei Sätze teilen.
-- Methodik und Statistik verständlich: Fachbegriffe (z.B. Impräzision, Entblindung, Lernkurveneffekt, \
-Baseline-Imbalance, Kovariatenadjustierung, explorativ) kurz im Halbsatz erklären oder in allgemein \
-verständliche Worte fassen; bei jeder Limitation sagen, was sie für das Ergebnis bedeutet (in welche \
+- Methodik und Statistik verständlich: in der Medizin geläufige Begriffe (Signifikanz, Randomisierung, \
+Verblindung, Intention-to-treat, Konfidenzintervall, Placebo, Regression zur Mitte) NICHT erklären; nur \
+selten verwendete Begriffe (z.B. Impräzision, Entblindung, Kovariatenadjustierung) kurz im Halbsatz \
+erklären oder in einfache Worte fassen; bei jeder Limitation sagen, was sie für das Ergebnis bedeutet (in welche \
 Richtung sie es verschieben würde); Stichwortketten nach einem Doppelpunkt in flüssige Sätze auflösen. \
 Die statistische Würdigung in 2–3 einfachen Sätzen (ausnahmsweise 4, wenn sonst Inhalt verloren \
 ginge), danach genau ein Satz zur Qualität der Studie \
 aus statistischer Sicht (z.B. "Aus statistischer Sicht ist die Studie gut belastbar, weil …"). Keine \
 Metabemerkungen über die Quelle ("im Abstract nicht angegeben"). Schlussfolgerung der Autoren und Fazit im Indikativ, ohne Konjunktivketten; keine angehängten \
 Satzfragmente. Nicht gendern (generisches Maskulinum, keine Sternchen oder Doppelnennungen). \
+Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser Studie …"), bei Metaanalysen und \
+Reviews abwechseln. Grammatik prüfen (Subjekt-Verb-Kongruenz, z.B. "Erwachsene, die … ansprachen"). \
 Dabei nichts weglassen und keine neue Bewertung hinzufügen.
 - Gib NUR den überarbeiteten Text aus.
 
@@ -469,7 +475,9 @@ einzeln nacheinander.
 Regeln:
 - Eine Gruppe hat 2 oder 3 Publikationen; jede Publikation gehört höchstens zu einer Gruppe.
 - Nur bei wirklich nahezu gleicher Fragestellung (gleiche Population/Indikation und vergleichbare \
-Endpunkte). Dasselbe Thema allein reicht nicht. Im Zweifel keine Gruppe.
+Endpunkte). Auch dieselbe Intervention gegen denselben Vergleich bei derselben Erkrankung gilt als gleiche \
+Fragestellung, auch wenn sich die Subgruppen unterscheiden (z.B. ARMA gegen Sham bei PPI-responsiver und \
+bei PPI-refraktärer GERD); die Unterschiede werden dann in der gemeinsamen Würdigung herausgearbeitet. Dasselbe Thema allein reicht nicht. Im Zweifel keine Gruppe.
 - "question_de" / "question_en": die gemeinsame Fragestellung als kurzer Titel (höchstens ca. 12 Wörter).
 - Gibt es keine solche Gruppe, gib eine leere Liste zurück.
 
