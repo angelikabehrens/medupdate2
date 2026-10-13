@@ -18,7 +18,7 @@ from datetime import date
 import streamlit as st
 
 from medupdate import pipeline
-from medupdate.config import secret
+from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
 
@@ -65,6 +65,7 @@ DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 # ---------- Seitenleiste ----------
 _SHARED_KEY = secret("ANTHROPIC_API_KEY")
 with st.sidebar:
+    st.caption(f"Programmstand {APP_VERSION}")
     if _SHARED_KEY:
         api_key = _SHARED_KEY
         st.header("🔑 KI-Zugang")
@@ -546,6 +547,9 @@ if any("recommended" in t for t in proj["topics"].values()):
                            f"Bisherige_Ergebnisse_{date.today().isoformat()}.docx", DOCX_MIME)
     if out.get("manuskript_DE"):
         st.subheader("Ergebnis")
+        if out.get("created"):
+            st.caption(f"Erstellt am {out['created'][:10]} um {out['created'][11:16]} Uhr (UTC), Programmstand "
+                       f"{out.get('version', 'unbekannt')}.")
         d1, d2, d3 = st.columns(3)
         today = date.today().isoformat()
         d1.download_button("⬇️ Manuskript (Deutsch)", out["manuskript_DE"], f"Manuskript_DE_{today}.docx", DOCX_MIME)

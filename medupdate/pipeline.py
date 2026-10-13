@@ -12,7 +12,7 @@ import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timezone
 
 from . import appraisal as A
 from . import guidelines as G
@@ -24,7 +24,7 @@ from .citations import (
     reconcile_local_citations,
     strip_appraisal_preamble,
 )
-from .config import MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
+from .config import APP_VERSION, MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
 from .files import extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
@@ -37,7 +37,7 @@ from .references import make_formatter
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 6
+SHORT_VERSION = 7
 GROUP_VERSION = 2  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 
 def new_project() -> dict:
@@ -740,6 +740,11 @@ def _main_text(text: str) -> str:
 
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
+    # Ein älteres Manuskript (z.B. aus einem geladenen Zwischenstand) darf nach einem Abbruch nicht als
+    # Ergebnis dieses Laufs heruntergeladen werden.
+    for k in ("manuskript_DE", "manuskript_EN", "rohfassung_DE", "rohfassung_EN", "pruefprotokoll", "befunde",
+              "created", "version"):
+        (proj.get("outputs") or {}).pop(k, None)
     apply_manual_limits(proj)
     ensure_varia(proj)
     try:
@@ -1018,6 +1023,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             _err(proj, f"Formale Prüfung {key}", ex)
             befunde, final = [], raw
         proj["outputs"][f"manuskript_{key}"] = final
+        proj["outputs"]["created"] = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        proj["outputs"]["version"] = APP_VERSION
         proj["outputs"][f"rohfassung_{key}"] = raw
         if lang == "Deutsch":
             befunde = _pipeline_findings(proj, ready) + befunde

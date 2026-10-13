@@ -301,6 +301,20 @@ Konfidenzintervalle und p-Werte unverändert (Dezimalpunkt wird zum deutschen De
 ist; Fachbegriffe und etablierte Abkürzungen beibehalten. Arzneimittel nur mit Wirkstoffnamen. \
 "CI" wird im Fließtext zu "Konfidenzintervall", in Zahlenklammern zu "95%-KI". Keine Ich-/Wir-Form.
 
+Deutsche Sprachregeln der Autorin:
+- Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser multizentrischen Studie …", \
+"Diese randomisierte Studie …", nicht "In einer … Studie"); bei Metaanalysen und Reviews den Einstieg \
+abwechseln.
+- In der Medizin geläufige Begriffe (Signifikanz, Randomisierung, verdeckte Randomisierung, Verblindung, \
+Intention-to-treat, Konfidenzintervall, Placebo, Sham, Metaanalyse, Regression zur Mitte, Adjustierung, \
+Superiorität, Querschnittstudie) NICHT erklären: Erklärungen wie "(Prüfung auf Überlegenheit)", "also \
+die Patienten in der ihnen zugeteilten Gruppe" oder "(die Zuteilung war vorab nicht vorhersehbar)" \
+weglassen, auch wenn sie in der Vorlage stehen. Nur selten verwendete Begriffe kurz erklären.
+- Nicht gendern: generisches Maskulinum ("Patienten", "Untersucher"), keine Sternchen, keine \
+Doppelnennungen.
+- Grammatik prüfen, besonders die Kongruenz von Subjekt und Verb ("63 Erwachsene, die auf PPI \
+ansprachen").
+
 Klammerverweise wie "(1)" oder "(2,3)" bleiben exakt an derselben Stelle im Satz stehen. Absatzstruktur \
 beibehalten (eine Zeile pro Absatz). Schreibe gut lesbare deutsche Sätze: Einen langen, verschachtelten \
 Satz darfst du in zwei kürzere Sätze teilen, ohne Inhalt wegzulassen. Gib NUR die Übersetzung aus, ohne \
