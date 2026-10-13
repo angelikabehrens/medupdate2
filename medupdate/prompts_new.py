@@ -227,11 +227,27 @@ Publikationen (ID | bisheriges Thema | Titel | Fragestellung | Inhalt):
 
 
 def headings_de_prompt(items: str) -> str:
-    return f"""Übersetze die folgenden Überschriften eines medizinischen Fortbildungshandbuchs \
-(Gastroenterologie/Endoskopie) ins Deutsche, wie sie in einem deutschen Fachbuch stehen würden: \
-fachsprachlich korrekt, knapp, gleiche Großschreibung wie im Deutschen üblich. Etablierte Abkürzungen \
-(z.B. GERD, EUS, ERCP, ESD) bleiben erhalten. Ist eine Überschrift schon deutsch, gib sie unverändert \
-zurück. "id" ist die Nummer vor dem Doppelpunkt.
+    return f"""Erstelle die deutschen Überschriften eines medizinischen Fortbildungshandbuchs \
+(Gastroenterologie/Endoskopie). Die Vorlage ist oft englisch und stammt aus Suchbegriffen. Übersetze \
+NICHT wörtlich, sondern wähle den deutschen Fachbegriff, unter dem ein deutsches Fachbuch genau das \
+Thema der darunter besprochenen Publikationen führen würde.
+
+Regeln:
+- Maßgeblich ist, worum es in den besprochenen Publikationen tatsächlich geht. Behandeln sie z.B. \
+ausschließlich therapeutische Eingriffe, sagt die Überschrift das („endoscopic ultrasound and bile \
+duct“ → „Therapeutische Endosonographie am Gallengang“). Beispiele: „screening for gastric cancer“ → \
+„Vorsorgegastroskopie“; „early squamous cell carcinoma of the esophagus and endoscopy“ → \
+„Plattenepithelfrühkarzinom des Ösophagus“.
+- Aus mehreren Suchbegriffen zusammengesetzte Vorlagen („Ösophagus and Endoscopic resections, \
+endoscopic submucosal dissection“) werden zu EINER knappen Überschrift („Endoskopische Resektion im \
+Ösophagus“).
+- Organ- und Abschnittsüberschriften (Ebene x.x) knapp halten („Ösophagus“, „Magen“).
+- Knapp (meist 1–6 Wörter), fachsprachlich korrekt, übliche deutsche Groß- und Kleinschreibung. \
+Etablierte Abkürzungen (z.B. GERD, EUS, ERCP, ESD, POEM) dürfen bleiben, ausgeschrieben oder in \
+Klammern, wie in deutschen Fachbüchern üblich.
+- Erfinde keinen Schwerpunkt, den die Publikationen nicht tragen. Ohne Publikationen: fachgerecht \
+übersetzen. Ist eine Überschrift schon deutsch und passend, gib sie unverändert zurück.
+- "id" ist die Nummer vor dem Doppelpunkt, "de" die deutsche Überschrift.
 
 {items}"""
 

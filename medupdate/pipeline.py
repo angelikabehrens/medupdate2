@@ -1146,28 +1146,55 @@ def vary_fazit_openings(llm: LLM, proj: dict, ready: list[tuple[str, str]], log)
 HEADINGS_SCHEMA = obj({"items": arr(obj({"id": STR, "de": STR}))})
 
 
+HEADINGS_VERSION = 2  # 2: deutsche Überschrift nach dem tatsächlichen Inhalt der Publikationen
+
+
 def headings_de(llm: LLM, proj: dict, topic_ids: list[str]) -> dict[str, str]:
-    """Deutsche Fassung aller Überschriften (Kapitel, Abschnitte, Unterabschnitte, Themen) für das
-    deutsche Manuskript, auch wenn das Inhaltsverzeichnis englisch hochgeladen wurde. Ein günstiger
-    KI-Aufruf; bereits Übersetztes wird wiederverwendet."""
-    cache = proj.setdefault("headings_de", {})
-    srcs = [(proj.get("toc") or {}).get("chapter_title") or ""]
+    """Deutsche Überschriften (Kapitel, Abschnitte, Unterabschnitte, Themen) für das deutsche Manuskript,
+    auch wenn das Inhaltsverzeichnis englisch hochgeladen wurde. Nicht wörtlich übersetzt, sondern als
+    deutscher Fachbegriff für das, worum es in den besprochenen Publikationen tatsächlich geht (Wunsch der
+    Autorin, 2026-10-13). Ein günstiger KI-Aufruf; neu nur, wenn sich Überschriften oder Publikationen ändern."""
+    by_topic: dict[str, list[str]] = {}
+    for p, tid in _pub_list(proj):
+        if tid in topic_ids:
+            by_topic.setdefault(tid, []).append((proj["records"].get(p, {}).get("title") or "")[:160])
+    ctx: dict[str, dict] = {}  # Überschrift -> {"level", "focus", "pubs"}
+    chapter = (proj.get("toc") or {}).get("chapter_title") or ""
+    if chapter.strip():
+        ctx[chapter] = {"level": "Kapitel", "focus": "", "pubs": []}
     for tid in topic_ids:
         t = proj["topics"][tid]
-        srcs += [t.get("section_title") or "", t.get("subsection_title") or "", t["title"]]
-    missing = [x for x in dict.fromkeys(srcs) if x.strip() and x != "Varia" and x not in cache]
-    if missing:
-        items = "\n".join(f"{i}: {x}" for i, x in enumerate(missing))
-        res = llm.json(P.headings_de_prompt(items), HEADINGS_SCHEMA, model=MODEL_FAST, max_tokens=4000,
-                       effort="low")
-        for it in res.get("items", []):
-            try:
-                src = missing[int(it.get("id", ""))]
-            except (ValueError, IndexError):
+        pubs = by_topic.get(tid, [])
+        for level, src, focus in (("Abschnitt (x.x)", t.get("section_title") or "", ""),
+                                  ("Unterabschnitt", t.get("subsection_title") or "", ""),
+                                  ("Thema", t["title"], t.get("english_search_focus") or "")):
+            if not src.strip() or src == "Varia":
                 continue
-            if it.get("de", "").strip():
-                cache[src] = it["de"].strip()
-    return cache
+            c = ctx.setdefault(src, {"level": level, "focus": focus, "pubs": []})
+            c["pubs"] += [x for x in pubs if x not in c["pubs"]]
+    key = [f"v{HEADINGS_VERSION}"] + sorted(f"{k}|{'|'.join(sorted(v['pubs']))}" for k, v in ctx.items())
+    cache = proj.get("headings_de") or {}
+    if proj.get("headings_de_for") == key:
+        return cache
+    srcs = list(ctx)
+    items = "\n\n".join(
+        f"{i}: {src}\n   Ebene: {ctx[src]['level']}"
+        + (f"\n   Suchschwerpunkt: {ctx[src]['focus']}" if ctx[src]["focus"] else "")
+        + ("\n   Besprochene Publikationen:\n" + "\n".join(f"   - {x}" for x in ctx[src]["pubs"][:12])
+           if ctx[src]["pubs"] else "")
+        for i, src in enumerate(srcs))
+    res = llm.json(P.headings_de_prompt(items), HEADINGS_SCHEMA, model=MODEL_FAST, max_tokens=4000,
+                   effort="medium")
+    new = {}
+    for it in res.get("items", []):
+        try:
+            src = srcs[int(it.get("id", ""))]
+        except (ValueError, IndexError):
+            continue
+        if it.get("de", "").strip():
+            new[src] = it["de"].strip()
+    proj["headings_de"], proj["headings_de_for"] = new, key
+    return new
 
 
 def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
