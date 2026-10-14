@@ -844,12 +844,15 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
 
     # 4. Kürzung (englisch). Auf Wunsch werden ältere Kürzungen (vor SHORT_VERSION) neu erstellt; dann
     # auch Übersetzung und Stilfassung, die darauf aufbauen.
-    if options.get("reshorten"):
-        for p, _ in ready:
-            d = proj["pubs"][p]
-            if d.get("short_en") and d.get("short_v", 1) < SHORT_VERSION:
-                for k in ("short_en", "short_de", "styled_de", "style_ok"):
-                    d.pop(k, None)
+    compact = {"stats": bool(options.get("compact_stats")), "comment": bool(options.get("compact_comment"))}
+    for p, _ in ready:
+        d = proj["pubs"][p]
+        old = d.get("short_en") and options.get("reshorten") and d.get("short_v", 1) < SHORT_VERSION
+        # Häkchen „Statistik/Kommentar kompakt“ geändert: diese Würdigung neu kürzen
+        changed = d.get("short_en") and (d.get("short_compact") or {"stats": False, "comment": False}) != compact
+        if old or changed:
+            for k in ("short_en", "short_de", "styled_de", "style_ok"):
+                d.pop(k, None)
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_en")]
 
     # Literaturbudget: Hauptquellen + State of the Art (≈3 je Abschnitt) zuerst, der Rest verteilt sich auf
@@ -864,9 +867,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     def shorten(p):
         d, rec = proj["pubs"][p], proj["records"].get(p, {})
         if d.get("group"):
-            return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch", max_ext=ext_budget)
+            return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch", max_ext=ext_budget,
+                                   compact=compact)
         return A.shorten(llm, d["body_en"], proj["tiers"][p], "Englisch", rec.get("abstract", ""),
-                         max_ext=ext_budget)
+                         max_ext=ext_budget, compact=compact)
 
     log("Würdigungen werden auf die geplanten Längen gekürzt…")
     for p, res in _parallel(todo, shorten, log, "Kürzung").items():
@@ -875,6 +879,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             proj["pubs"][p]["short_en"] = proj["pubs"][p]["body_en"]  # ungekürzt weiterverwenden
         else:
             proj["pubs"][p]["short_en"], proj["pubs"][p]["short_v"] = res, SHORT_VERSION
+            proj["pubs"][p]["short_compact"] = dict(compact)
             proj["pubs"][p]["short_tier"] = proj["tiers"][p]
 
     # 5. Übersetzung ins Deutsche

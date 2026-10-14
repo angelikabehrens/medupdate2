@@ -115,12 +115,36 @@ def _ext_limit_note(max_ext: int | None) -> str:
             "erfinde keine Verweise.")
 
 
+# Kompakte Statistik bzw. kompakter Kommentar (Häkchen in Schritt 2, Angelika 2026-10-14): Satzzahl nach
+# Längenstufe, damit beide Teile zum Umfang der Würdigung passen
+_COMPACT_SENTENCES = {"½ Seite (Kurz)": (1, 1), "1 Seite": (2, 2), "1,5 Seiten (Lang)": (2, 3), "2 Seiten": (3, 3)}
+
+
+def _compact_note(compact: dict | None, tier: str) -> str:
+    compact = compact or {}
+    n_stat, n_comm = _COMPACT_SENTENCES.get(tier, (2, 2))
+    out = ""
+    if compact.get("stats"):
+        out += (f"\n\nSTATISTIK KOMPAKT (Vorrang vor der Vorgabe von 2–3 Sätzen): Beschränke die Würdigung von "
+                f"Statistik und Validität auf die wesentlichen Punkte, höchstens {n_stat} kurze(r) Satz/Sätze mit "
+                "den ein oder zwei Punkten, die das Ergebnis am stärksten beeinflussen, danach der eine Satz zur "
+                "statistischen Qualität der Studie. Nebensächliche Limitationen entfallen. Die gewonnenen Wörter "
+                "nicht anderswo auffüllen.")
+    if compact.get("comment"):
+        n = max(1, n_comm)
+        out += (f"\n\nKOMMENTAR KOMPAKT: Der Absatz „Kommentar“ bzw. „Comment“ hat höchstens {n} kurze(n) "
+                "Satz/Sätze mit der wichtigsten Einordnung (Neuheit, klinische Bedeutung). Weitere Gedanken "
+                "entfallen; das Fazit für die Praxis bleibt unverändert.")
+    return out
+
+
 def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text: str = "",
-            max_ext: int | None = None) -> str:
+            max_ext: int | None = None, compact: dict | None = None) -> str:
     """Kürzung nach dem Skill "studien-wuerdigung" (Längenstufen siehe prompts.SKILL_LAENGEN_STUFEN)."""
     if tier == "Kurznachricht":
         return kurznachricht(llm, full_text, sprache_kw, abstract_text)
-    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext),
+    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext)
+                    + _compact_note(compact, tier),
                     model=MODEL_MAIN, max_tokens=8000,
                     effort="medium")
     if not text:
@@ -128,8 +152,10 @@ def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text:
     return renumber_and_prune_citations(text)
 
 
-def shorten_joint(llm: LLM, full_text: str, tier: str, sprache_kw: str, max_ext: int | None = None) -> str:
-    text = llm.text(M.joint_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext),
+def shorten_joint(llm: LLM, full_text: str, tier: str, sprache_kw: str, max_ext: int | None = None,
+                  compact: dict | None = None) -> str:
+    text = llm.text(M.joint_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext)
+                    + _compact_note(compact, tier),
                     model=MODEL_MAIN, max_tokens=8000,
                     effort="medium")
     if not text:

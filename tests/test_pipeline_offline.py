@@ -625,6 +625,14 @@ def test_comment_box():
     assert ps[3].runs[0].bold and not ps[3].runs[0].underline, "Fazit: fett, nicht unterstrichen"
 
 
+def test_compact_note():
+    from medupdate.appraisal import _compact_note
+    assert _compact_note(None, "1 Seite") == ""
+    n = _compact_note({"stats": True, "comment": True}, "½ Seite (Kurz)")
+    assert "STATISTIK KOMPAKT" in n and "höchstens 1 kurze" in n and "KOMMENTAR KOMPAKT" in n
+    assert "höchstens 3 kurze" in _compact_note({"comment": True}, "1,5 Seiten (Lang)")
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_direct_upload()
@@ -643,4 +651,5 @@ if __name__ == "__main__":
     test_sota_trailing_note()
     test_full_pipeline()
     test_comment_box()
+    test_compact_note()
     print("OK")

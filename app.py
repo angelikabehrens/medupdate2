@@ -516,11 +516,20 @@ if any("recommended" in t for t in proj["topics"].values()):
         o2, o3 = st.columns(2)
         opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
-        opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (2–3 je Gruppe)",
+        opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit gleicher Fragestellung (2–5 je Gruppe)",
                                 value=True, help="Wie Schritt 4B in MyLuo. Die Einzelwürdigungen werden zu einer "
                                                  "vergleichenden Würdigung zusammengeführt.")
         opt_own = st.checkbox("Inhaltliche Rückbezüge auf meine früheren Manuskripte (höchstens 2, nur wo sinnvoll)",
                               value=True, help="Nur wenn eigene Manuskripte hochgeladen sind. Ein zusätzlicher KI-Aufruf.")
+        _cmp = proj.get("compact_opts") or {}
+        k1, k2 = st.columns(2)
+        opt_cstats = k1.checkbox("Statistik kompakt: nur die wesentlichen Punkte", value=bool(_cmp.get("stats")),
+                                 help="½ Seite: 1 Satz, 1 Seite: 2 Sätze, 1,5 Seiten: 2 Sätze, jeweils plus ein Satz "
+                                      "zur statistischen Qualität. Bereits gekürzte Würdigungen werden bei einer "
+                                      "Änderung neu gekürzt (ca. 0,3 USD je Publikation).")
+        opt_ccomm = k2.checkbox("Kommentar kompakt: nur die wichtigste Einordnung", value=bool(_cmp.get("comment")),
+                                help="½ Seite: 1 Satz, 1 Seite: 2 Sätze, 1,5 Seiten: 3 Sätze. Bereits gekürzte "
+                                     "Würdigungen werden bei einer Änderung neu gekürzt (ca. 0,3 USD je Publikation).")
         b1, b2 = st.columns(2)
         opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
                                 "vollständigen Lauf)", value=not out_any(proj))
@@ -541,12 +550,13 @@ if any("recommended" in t for t in proj["topics"].values()):
         go2 = st.form_submit_button("✍️ Manuskript automatisch erstellen", disabled=not ready, type="primary")
 
     if go2 and ready:
+        proj["compact_opts"] = {"stats": bool(opt_cstats), "comment": bool(opt_ccomm)}
         llm = get_llm(float(opt_budget))
         if llm:
             run_with_status("Manuskript wird erstellt", lambda log: pipeline.run_manuscript(llm, proj, log, {
                 "sota": opt_sota, "style": opt_style, "trial": opt_trial,
                 "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
-                "reshorten": opt_reshorten}), llm)
+                "reshorten": opt_reshorten, "compact_stats": opt_cstats, "compact_comment": opt_ccomm}), llm)
 
     out = proj.get("outputs") or {}
     partial = pipeline.partial_docx(proj) if any(d.get("body_en") for d in proj["pubs"].values()) else None
