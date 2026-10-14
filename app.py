@@ -211,12 +211,10 @@ with st.form("step1"):
     l1, l2, l3 = st.columns(3)
     lim_pages = l1.number_input("Anzahl Manuskriptseiten (ohne Inhaltsverzeichnis)", min_value=0, max_value=500,
                                 value=int(_lim.get("pages") or 0), step=1,
-                                help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
-                                     f"{pipeline.tolerance_text(proj)}.")
+                                help=f"0 = Angabe aus den Hinweisen für Autoren. {pipeline.tolerance_note(proj)}.")
     lim_refs = l2.number_input("Anzahl der Literaturstellen", min_value=0, max_value=1000,
                                value=int(_lim.get("references") or 0), step=1,
-                               help=f"0 = Angabe aus den Hinweisen für Autoren. Überschreitung um höchstens "
-                                     f"{pipeline.tolerance_text(proj)}.")
+                               help=f"0 = Angabe aus den Hinweisen für Autoren. {pipeline.tolerance_note(proj)}.")
     lim_pubs = l3.number_input("Höchstzahl gewürdigter Publikationen", min_value=0, max_value=500,
                                value=int(_lim.get("publications") or 0), step=1,
                                help="0 = keine feste Zahl (es gilt nur der Seitenumfang). Wird nicht überschritten: "
@@ -281,8 +279,18 @@ if proj.get("toc"):
         with st.expander("📋 Erkannte Vorgaben aus den Hinweisen für Autoren"):
             st.json({k: v for k, v in rules.items() if v and not k.startswith("_")})
     _ml = proj.get("manual_limits") or {}
+    _strict = not (proj.get("limit_tolerance") or pipeline.LIMIT_TOLERANCE).get("value")
+    _strict_new = st.checkbox(
+        "Keine Toleranz: Seitenzahl, Literaturstellen und Publikationszahl dürfen nicht überschritten werden",
+        value=_strict, key="strict_limits", disabled=_running,
+        help="Ohne Häkchen dürfen Seiten und Literaturstellen um bis zu 10 überschritten werden. Gilt für die "
+             "Zahlen oben (bzw. die Hinweise für Autoren) und wirkt sofort, ohne Schritt 1 neu zu starten.")
+    if _strict_new != _strict:
+        pipeline.set_strict_limits(proj, _strict_new)
+        proj["check_ok"] = False  # Publikationszahl und Umfang in Schritt 2 neu prüfen
+        rules = proj.get("rules") or {}
     if _ml.get("pages") or _ml.get("references") or _ml.get("publications"):
-        st.caption(f"Manuelle Vorgaben (Überschreitung um höchstens {pipeline.tolerance_text(proj)}): "
+        st.caption(f"Manuelle Vorgaben ({pipeline.tolerance_note(proj)}): "
                    f"Obergrenze {rules.get('max_pages', 0) - 1 if rules.get('max_pages') else '–'} Seiten ohne "
                    f"Inhaltsverzeichnis, {rules.get('max_references') or '–'} Literaturstellen"
                    + (f", höchstens {_ml['publications']} gewürdigte Publikationen." if _ml.get("publications") else "."))

@@ -135,8 +135,8 @@ def effective_limit(value: int, tol: dict | None = None) -> int:
     if not value:
         return 0
     if tol.get("mode") == "absolute":
-        return int(value + tol.get("value", 10))
-    return int(value * (1 + tol.get("value", 10) / 100.0))
+        return int(value + tol.get("value", 0))
+    return int(value * (1 + tol.get("value", 0) / 100.0))
 
 
 def apply_manual_limits(proj: dict) -> None:
@@ -157,8 +157,26 @@ def apply_manual_limits(proj: dict) -> None:
     rules["max_publications"] = int(lim.get("publications") or 0)
 
 
+NO_TOLERANCE = {"mode": "absolute", "value": 0}
+
+
+def set_strict_limits(proj: dict, strict: bool) -> None:
+    """Häkchen „Keine Toleranz“ (Angelika 2026-10-14): Seiten und Literaturstellen sind dann harte
+    Obergrenzen wie die Publikationszahl."""
+    proj["limit_tolerance"] = dict(NO_TOLERANCE) if strict else dict(LIMIT_TOLERANCE)
+    apply_manual_limits(proj)
+
+
+def tolerance_note(proj: dict) -> str:
+    tol = proj.get("limit_tolerance") or LIMIT_TOLERANCE
+    return ("keine Überschreitung erlaubt" if not tol.get("value")
+            else f"Überschreitung um höchstens {tolerance_text(proj)}")
+
+
 def tolerance_text(proj: dict) -> str:
     tol = proj.get("limit_tolerance") or LIMIT_TOLERANCE
+    if not tol.get("value"):
+        return "0 (keine Toleranz)"
     if tol.get("mode") != "absolute":
         return f"{tol['value']} %"
     return f"{tol['value']} Seiten bzw. {tol['value']} Literaturstellen"
