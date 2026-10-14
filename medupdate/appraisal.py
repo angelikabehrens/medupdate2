@@ -337,6 +337,7 @@ def estimate_pages(tiers: dict[str, str], n_sections: int) -> float:
 DEFAULT_TIER_COUNTS = {"long": 3, "mid": 8, "short": 20, "news": 19}
 TOP_SCORE = 80   # "sehr hohe Qualität und Bedeutung"
 TOP_15_SCORE = 90  # lange Würdigung mit 1,5 statt 1 Seite
+COUNT_TOLERANCE_PAGES = 3  # so viel darf die geplante Verteilung überschritten werden (Angelika 2026-10-14)
 
 
 def count_tiers(pubs: list[dict], counts: dict) -> tuple[dict[str, str], list[str]]:
@@ -390,7 +391,7 @@ def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str
     if counts and any(int(counts.get(k) or 0) for k in ("long", "mid", "short", "news")):
         tiers, overflow = count_tiers(pubs, counts)
         # Mehr Spitzenstudien als geplant: Gesamtumfang der geplanten Verteilung halten
-        budget = _nominal_pages(counts, n_sections)
+        budget = _nominal_pages(counts, n_sections) + COUNT_TOLERANCE_PAGES
         limit = min(x for x in (budget, max_pages or budget) if x)
         keep = sorted([p for p in pubs if p["id"] in tiers], key=lambda p: p.get("length_score", 0),
                       reverse=True)
