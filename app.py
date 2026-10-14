@@ -289,22 +289,23 @@ if proj.get("toc"):
         pipeline.set_strict_limits(proj, _strict_new)
         proj["check_ok"] = False  # Publikationszahl und Umfang in Schritt 2 neu prüfen
         rules = proj.get("rules") or {}
-    _mix = dict(proj.get("tier_mix") or A.DEFAULT_TIER_MIX)
-    st.caption("Verteilung der Würdigungslängen (Prozent der Publikationen, nach Studienqualität vergeben). "
-               "Passt es nicht in die Seitenzahl, entfallen die schwächsten Studien, statt alle zu kürzen.")
-    m1, m2, m3 = st.columns(3)
-    _mix_new = {
-        "long": int(m1.number_input("Lang (1,5 Seiten, mit Kommentar und Fazit) %", 0, 100,
-                                    int(_mix.get("long", 20)), step=5, disabled=_running, key="mix_long")),
-        "mid": int(m2.number_input("Mittel (1 Seite, mit Fazit) %", 0, 100,
-                                   int(_mix.get("mid", 30)), step=5, disabled=_running, key="mix_mid")),
-        "short": int(m3.number_input("Kurz (½ Seite) %", 0, 100,
-                                     int(_mix.get("short", 50)), step=5, disabled=_running, key="mix_short")),
+    _cnt = dict(proj.get("tier_counts") or A.DEFAULT_TIER_COUNTS)
+    st.caption("Verteilung der Würdigungslängen (Anzahl Publikationen, von oben nach Studienqualität, Priorität "
+               "und Bedeutung vergeben). Gibt es mehr Spitzenstudien, werden auch diese lang gewürdigt; dafür "
+               "entfallen am unteren Ende die schwächsten Studien. Das Seitenlimit gilt zusätzlich.")
+    m1, m2, m3, m4 = st.columns(4)
+    _cnt_new = {
+        "long": int(m1.number_input("Lang (1–1,5 Seiten, Kommentar und Fazit)", 0, 100,
+                                    int(_cnt.get("long", 3)), step=1, disabled=_running, key="cnt_long")),
+        "mid": int(m2.number_input("Mittel (¾ Seite, Fazit)", 0, 200,
+                                   int(_cnt.get("mid", 8)), step=1, disabled=_running, key="cnt_mid")),
+        "short": int(m3.number_input("Kurz (½ Seite)", 0, 300,
+                                     int(_cnt.get("short", 20)), step=1, disabled=_running, key="cnt_short")),
+        "news": int(m4.number_input("Kurznachricht (≈0,2–0,3 Seite)", 0, 300,
+                                    int(_cnt.get("news", 19)), step=1, disabled=_running, key="cnt_news")),
     }
-    if sum(_mix_new.values()) != 100:
-        st.warning(f"Die drei Werte ergeben {sum(_mix_new.values())} % statt 100 %; sie werden anteilig verwendet.")
-    if _mix_new != _mix:
-        proj["tier_mix"] = _mix_new
+    if _cnt_new != _cnt:
+        proj["tier_counts"] = _cnt_new
         pipeline.apply_manual_limits(proj)
         proj["check_ok"] = False  # Publikationszahl und Umfang in Schritt 2 neu prüfen
         rules = proj.get("rules") or {}

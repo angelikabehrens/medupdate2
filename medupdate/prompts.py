@@ -493,7 +493,9 @@ SKILL_LAENGEN_STUFEN = {
     "Ausführlich": None,
     "Kurznachricht": 75,
     "½ Seite (Kurz)": 160,
+    "¾ Seite": 270,
     "1 Seite": 370,
+    "1 Seite (Lang)": 420,
     "1,5 Seiten (Lang)": 570,
     "2 Seiten": 700,
 }
@@ -595,7 +597,7 @@ Ergebnis in Worten: ca. 30%
 - Neuheit/Einordnung in einem Halbsatz: ca. 5-10%
 - Letzter Satz (ohne Label): die Kernaussage der Publikation – die Hauptbotschaft der Autoren MIT \
 deren Hedging, nicht die Meinung des Rezensenten: ca. 10-15%"""
-    elif tier == "1 Seite":
+    elif tier in ("1 Seite", "¾ Seite"):
         aufbau = f"""Aufbau in drei Blöcken:
 1. Abstract-Block (ca. 30%): mit FETTEN Labels "Studie:", "Ergebnisse:", "Schlussfolgerung der \
 Autoren:" (deren Wortlaut MIT Hedging, alle Teilaussagen der Schlussfolgerung enthalten).
@@ -606,7 +608,7 @@ für die Praxis inkl. Übertragbarkeit.
 "{fazit_label}:". Kurz und prägnant nach der Regel FAZIT FÜR DIE PRAXIS KURZ UND PRÄGNANT unten.
 
 KEIN persönlicher Kommentar: keine Ich-Aussagen, keine subjektiven Erfahrungsberichte."""
-    elif tier == "1,5 Seiten (Lang)":
+    elif tier in ("1,5 Seiten (Lang)", "1 Seite (Lang)"):
         aufbau = f"""Aufbau in vier Blöcken:
 1. Abstract-Block (ca. 25%): wie bei "1 Seite" (fette Labels "Studie:", "Ergebnisse:", \
 "Schlussfolgerung der Autoren:").
@@ -985,7 +987,7 @@ Richtwerte für die Gewichtung:
 NICHT zulässig ist (z.B. keine gemeinsame Effektschätzung): ca. 25%
 - Wichtigste kritische Punkte aus der "{wuerdigung_label}": ca. 35%
 - Letzter Satz (ohne Label): die Kernaussage des "{fazit_label}": ca. 25%"""
-    elif tier == "1 Seite":
+    elif tier in ("1 Seite", "¾ Seite"):
         aufbau = f"""Aufbau in drei Blöcken:
 1. "{uebersicht_label}" (ca. 25%): Für jede Publikation ein bis zwei knappe Sätze (Studiendesign, \
 Population, Hauptergebnis), eingeleitet mit "Publication 1:" bzw. "Publikation 1:" usw., mit Nennung der \
@@ -996,7 +998,8 @@ zulässig), dann die wichtigsten methodischen Stärken/Schwächen über die Publ
 3. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit "{fazit_label}:". Kurz und prägnant: \
 zuerst die Qualität der Evidenz insgesamt ohne Begründung, dann die Praxisaussage (siehe Regel unten)."""
     else:
-        tier = "1,5 Seiten (Lang)"
+        if tier not in ("1,5 Seiten (Lang)", "1 Seite (Lang)"):
+            tier = "1,5 Seiten (Lang)"
         aufbau = f"""Aufbau in vier Blöcken:
 1. "{uebersicht_label}" (ca. 25%): wie bei "1 Seite", mit Nennung der Evidenzstufe je Publikation.
 2. "{verknuepfung_label}" (ca. 25%): Fließtext, ob und wie die Verknüpfung zulässig ist, was \

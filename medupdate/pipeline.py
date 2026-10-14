@@ -155,8 +155,8 @@ def apply_manual_limits(proj: dict) -> None:
                                else guide["max_references"])
     # Höchstzahl gewürdigter Publikationen: genau der eingegebene Wert (keine Toleranz)
     rules["max_publications"] = int(lim.get("publications") or 0)
-    # Feste Verteilung der Würdigungslängen in Prozent (lang / mittel / kurz)
-    rules["tier_mix"] = dict(proj.get("tier_mix") or A.DEFAULT_TIER_MIX)
+    # Feste Zahl je Würdigungslänge (lang / mittel / kurz / Kurznachricht)
+    rules["tier_counts"] = dict(proj.get("tier_counts") or A.DEFAULT_TIER_COUNTS)
 
 
 NO_TOLERANCE = {"mode": "absolute", "value": 0}
@@ -834,7 +834,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     apply_manual_limits(proj)
     prev_tiers = dict(proj.get("tiers") or {})
     limit_key = [(proj.get("rules") or {}).get("max_pages"), (proj.get("rules") or {}).get("max_references"),
-                 (proj.get("rules") or {}).get("tier_mix")]
+                 (proj.get("rules") or {}).get("tier_counts")]
     if (not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready)
             or proj.get("tiers_for_limits") != limit_key):
         proj["tiers_for_limits"] = limit_key
