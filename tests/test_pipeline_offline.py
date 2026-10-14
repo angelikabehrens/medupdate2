@@ -393,6 +393,15 @@ def test_length_budget():
     assert all(t == "½ Seite (Kurz)" for t in tiers.values())
     tiers, overflow = plan_tiers(pubs, {"max_pages": 6}, 1)
     assert not overflow and tiers["0"] != "½ Seite (Kurz)" and tiers["4"] == "½ Seite (Kurz)"
+    # Feste Verteilung lang/mittel/kurz: bei Platzmangel fallen die schwächsten weg, statt alle zu kürzen
+    pubs10 = [{"id": str(i), "length_score": 100 - i} for i in range(10)]
+    mix = {"long": 20, "mid": 30, "short": 50}
+    tiers, overflow = plan_tiers(pubs10, {"tier_mix": mix}, 1)
+    assert [tiers[str(i)] for i in (0, 1, 2, 4, 5, 9)] == ["1,5 Seiten (Lang)"] * 2 + ["1 Seite"] * 2 + ["½ Seite (Kurz)"] * 2
+    tiers, overflow = plan_tiers(pubs10, {"tier_mix": mix, "max_pages": 8}, 1)
+    assert overflow and overflow[0] == "9" and "1,5 Seiten (Lang)" in tiers.values()
+    from medupdate.appraisal import estimate_pages
+    assert estimate_pages(tiers, 1) <= 8
 
 
 def test_outline_levels():

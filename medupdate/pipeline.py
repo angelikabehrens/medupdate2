@@ -155,6 +155,8 @@ def apply_manual_limits(proj: dict) -> None:
                                else guide["max_references"])
     # Höchstzahl gewürdigter Publikationen: genau der eingegebene Wert (keine Toleranz)
     rules["max_publications"] = int(lim.get("publications") or 0)
+    # Feste Verteilung der Würdigungslängen in Prozent (lang / mittel / kurz)
+    rules["tier_mix"] = dict(proj.get("tier_mix") or A.DEFAULT_TIER_MIX)
 
 
 NO_TOLERANCE = {"mode": "absolute", "value": 0}
@@ -829,7 +831,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     if options.get("joint", True):
         ready = apply_groups(llm, proj, ready, log)
 
-    limit_key = [(proj.get("rules") or {}).get("max_pages"), (proj.get("rules") or {}).get("max_references")]
+    apply_manual_limits(proj)
+    prev_tiers = dict(proj.get("tiers") or {})
+    limit_key = [(proj.get("rules") or {}).get("max_pages"), (proj.get("rules") or {}).get("max_references"),
+                 (proj.get("rules") or {}).get("tier_mix")]
     if (not proj.get("tiers") or options.get("replan_tiers") or any(p not in proj["tiers"] for p, _ in ready)
             or proj.get("tiers_for_limits") != limit_key):
         proj["tiers_for_limits"] = limit_key
@@ -850,7 +855,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         old = d.get("short_en") and options.get("reshorten") and d.get("short_v", 1) < SHORT_VERSION
         # Häkchen „Statistik/Kommentar kompakt“ geändert: diese Würdigung neu kürzen
         changed = d.get("short_en") and (d.get("short_compact") or {"stats": False, "comment": False}) != compact
-        if old or changed:
+        # geplante Länge geändert (z.B. neue Verteilung lang/mittel/kurz): neu kürzen
+        retier = d.get("short_en") and ((d.get("short_tier") or prev_tiers.get(p)) or proj["tiers"].get(p)) \
+            != proj["tiers"].get(p)
+        if old or changed or retier:
             for k in ("short_en", "short_de", "styled_de", "style_ok"):
                 d.pop(k, None)
     todo = [(p, p) for p, _ in ready if not proj["pubs"][p].get("short_en")]

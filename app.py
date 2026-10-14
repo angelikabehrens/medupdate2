@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from medupdate import pipeline
+from medupdate import appraisal as A, pipeline
 from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
@@ -287,6 +287,25 @@ if proj.get("toc"):
              "Zahlen oben (bzw. die Hinweise für Autoren) und wirkt sofort, ohne Schritt 1 neu zu starten.")
     if _strict_new != _strict:
         pipeline.set_strict_limits(proj, _strict_new)
+        proj["check_ok"] = False  # Publikationszahl und Umfang in Schritt 2 neu prüfen
+        rules = proj.get("rules") or {}
+    _mix = dict(proj.get("tier_mix") or A.DEFAULT_TIER_MIX)
+    st.caption("Verteilung der Würdigungslängen (Prozent der Publikationen, nach Studienqualität vergeben). "
+               "Passt es nicht in die Seitenzahl, entfallen die schwächsten Studien, statt alle zu kürzen.")
+    m1, m2, m3 = st.columns(3)
+    _mix_new = {
+        "long": int(m1.number_input("Lang (1,5 Seiten, mit Kommentar und Fazit) %", 0, 100,
+                                    int(_mix.get("long", 20)), step=5, disabled=_running, key="mix_long")),
+        "mid": int(m2.number_input("Mittel (1 Seite, mit Fazit) %", 0, 100,
+                                   int(_mix.get("mid", 30)), step=5, disabled=_running, key="mix_mid")),
+        "short": int(m3.number_input("Kurz (½ Seite) %", 0, 100,
+                                     int(_mix.get("short", 50)), step=5, disabled=_running, key="mix_short")),
+    }
+    if sum(_mix_new.values()) != 100:
+        st.warning(f"Die drei Werte ergeben {sum(_mix_new.values())} % statt 100 %; sie werden anteilig verwendet.")
+    if _mix_new != _mix:
+        proj["tier_mix"] = _mix_new
+        pipeline.apply_manual_limits(proj)
         proj["check_ok"] = False  # Publikationszahl und Umfang in Schritt 2 neu prüfen
         rules = proj.get("rules") or {}
     if _ml.get("pages") or _ml.get("references") or _ml.get("publications"):

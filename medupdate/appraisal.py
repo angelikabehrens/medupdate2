@@ -330,14 +330,42 @@ def estimate_pages(tiers: dict[str, str], n_sections: int) -> float:
     return round(sum(TIER_PAGES[t] for t in tiers.values()) + overhead, 1)
 
 
+DEFAULT_TIER_MIX = {"long": 20, "mid": 30, "short": 50}  # Prozent lang / mittel / kurz (Angelika 2026-10-14)
+
+
+def mix_tiers(pubs: list[dict], mix: dict) -> dict[str, str]:
+    """Feste Verteilung der Längen: die besten Arbeiten (Längenwert = Studienqualität vor Bedeutung der
+    Fragestellung vor Impact Factor) werden lang, die nächsten mittel, der Rest kurz gewürdigt."""
+    order = sorted(pubs, key=lambda p: p.get("length_score", 0), reverse=True)
+    total = sum(max(0, int(mix.get(k) or 0)) for k in ("long", "mid", "short")) or 100
+    n = len(order)
+    n_long = round(n * max(0, int(mix.get("long") or 0)) / total)
+    n_mid = round(n * max(0, int(mix.get("mid") or 0)) / total)
+    tiers = {}
+    for i, p in enumerate(order):
+        tiers[p["id"]] = ("1,5 Seiten (Lang)" if i < n_long else "1 Seite" if i < n_long + n_mid
+                          else "½ Seite (Kurz)")
+    return tiers
+
+
 def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str, str], list[str]]:
-    """pubs: [{"id", "length_score"}]. Die Länge richtet sich nach dem Längenwert (Studienqualität vor
-    Bedeutung der Fragestellung vor Impact Factor): ≥80 → 1,5 Seiten, ≥65 → 1 Seite, sonst ½ Seite.
-    Liegt ein Seitenlimit vor, werden zuerst die Arbeiten mit dem niedrigsten Längenwert stufenweise
-    gekürzt (nicht unter ½ Seite). Reicht das nicht, werden die schwächsten Arbeiten als "overflow"
-    zurückgegeben. Rückgabe: (Längenstufen, overflow-IDs)."""
+    """pubs: [{"id", "length_score"}]. Mit fester Verteilung (rules["tier_mix"], Prozent lang/mittel/kurz)
+    werden die Längen nach dem Längenwert vergeben; passt das nicht in das Seitenlimit, fallen die
+    schwächsten Arbeiten heraus ("overflow"), statt alle zu kürzen. Ohne Verteilung (alte Regel): ≥80 →
+    1,5 Seiten, ≥65 → 1 Seite, sonst ½ Seite; bei Seitenlimit zuerst stufenweise kürzen, dann overflow.
+    Rückgabe: (Längenstufen, overflow-IDs)."""
+    rules = rules or {}
+    max_pages = rules.get("max_pages") or 0
+    mix = rules.get("tier_mix")
+    if mix and any(int(mix.get(k) or 0) for k in ("long", "mid", "short")):
+        keep = sorted(pubs, key=lambda p: p.get("length_score", 0), reverse=True)
+        overflow = []
+        tiers = mix_tiers(keep, mix)
+        while max_pages and len(keep) > 1 and estimate_pages(tiers, n_sections) > max_pages:
+            overflow.append(keep.pop()["id"])
+            tiers = mix_tiers(keep, mix)
+        return tiers, overflow
     tiers = {p["id"]: tier_for(p.get("length_score", 0)) for p in pubs}
-    max_pages = (rules or {}).get("max_pages") or 0
     if not max_pages:
         return tiers, []
     order = sorted(pubs, key=lambda p: p.get("length_score", 0))
