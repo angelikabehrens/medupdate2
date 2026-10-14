@@ -234,7 +234,7 @@ def split_intro(full_text: str) -> tuple[str, str]:
     return intro.strip()[:9000], refs.strip()[:20000]
 
 
-SOTA_SOURCE = "intro_v2"  # Trichter-Aufbau aus allen Einleitungen des Themas (Angelika 2026-10-13)
+SOTA_SOURCE = "intro_v3"  # Hinleitung zum Knackpunkt der folgenden Publikationen (Angelika 2026-10-14)
 
 
 def generate_sota_from_intro(llm: LLM, topic: str, pubs: list[tuple[str, str]],

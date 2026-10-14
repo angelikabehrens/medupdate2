@@ -68,7 +68,7 @@ class FakeLLM:
                 "Conclusion for Practice:", "Fazit für die Praxis:").replace("0.80", "0,80").replace(
                 "0.70-0.90", "0,70-0,90")
         if "Einleitung der Publikation:" in p:
-            assert "Trichter" in p
+            assert "Knackpunkt" in p and "keine Stichpunkte" in p
             return "State of the Art\nThe burden is high (1). Standard care has limits (2).\nReferences\n1. Intro A. 2024.\n2. Intro B. Gut. 2023;1:1."
         if "State of the" in p and "Art" in p and "Baseline" in p:
             return "State of the Art\nThe field is established (1). Gaps remain (2).\nReferences\n1. Guideline A. 2025.\n2. Review B. Lancet. 2024;1:1."
@@ -234,7 +234,7 @@ def test_full_pipeline(monkeypatch=None):
     for m in proj["pubs"][gid]["group"]:
         assert any(proj["records"][m]["doi"] in b for b in biblio), "beide Publikationen im Literaturverzeichnis"
     raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
-    assert proj["topics"]["T2"]["sota_en"]["source"] == "intro_v2", "State of the Art aus den Einleitungen"
+    assert proj["topics"]["T2"]["sota_en"]["source"] == "intro_v3", "State of the Art aus den Einleitungen"
     assert proj["topics"]["T4"]["sota_en"]["source"] == "web", "ohne Volltext: wie bisher per Websuche"
     assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
     i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")

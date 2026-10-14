@@ -36,8 +36,8 @@ from .references import make_formatter
 
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
-# erklärt, abwechslungsreiches Fazit (2026-10-11)
-SHORT_VERSION = 8
+# erklärt, abwechslungsreiches Fazit (2026-10-11); 9 = kurzes Fazit: Qualität ohne Begründung + Praxisaussage (2026-10-14)
+SHORT_VERSION = 9
 MAX_GROUP_SIZE = 5  # gemeinsame Würdigung von bis zu 5 Publikationen (Angelika 2026-10-13)
 GROUP_VERSION = 3  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 

@@ -255,17 +255,19 @@ Klammern, wie in deutschen Fachbüchern üblich.
 
 def vary_fazit_prompt(items: str) -> str:
     return f"""Ein deutsches Fortbildungsmanuskript enthält viele Studienbesprechungen. Ihr Absatz "Fazit für \
-die Praxis" beginnt oft mit demselben Satz (z.B. "Das Ergebnis ist neu."). Formuliere für jede \
-Besprechung NUR den ersten Satz des Fazits neu, damit sich die Formulierungen im Manuskript abwechseln \
-und konkret zur Studie passen, z.B. "Diese Studie zeigt erstmals, dass …", "Erstmals liegt … vor", "Die \
-Arbeit bestätigt …", "Neu ist vor allem …", "Die Daten stützen …".
+die Praxis" ist kurz: zuerst ein knappes Qualitätsurteil ohne Begründung, dann die Praxisaussage. Oft \
+beginnen mehrere Fazits mit demselben Satz (z.B. "Hochwertige Studie, klares Ergebnis."). Formuliere für \
+jede Besprechung NUR den ersten Satz neu, damit sich die Formulierungen im Manuskript abwechseln und \
+konkret zur Studie passen, z.B. "Hochwertige randomisierte Studie, klares Ergebnis.", "Große, sorgfältig \
+geplante Registerstudie.", "Methodisch begrenzte Pilotstudie.".
 
 Regeln:
-- Die Aussage bleibt gleich (neu / bestätigend / nicht neu; Hedging bleibt). Keine neuen Fakten: Was neu \
-ist, darfst du nur aus dem mitgegebenen Fazit-Absatz übernehmen.
+- Die Aussage bleibt gleich (Qualitätsurteil unverändert, Hedging bleibt). Keine neuen Fakten, keine \
+Begründung hinzufügen; Studientyp nur, wenn er aus dem Fazit-Absatz hervorgeht. Knappe Nominalsätze \
+sind erlaubt.
 - Der Satz muss nahtlos vor den übrigen Sätzen des Absatzes stehen können; wiederhole nichts, was im \
 nächsten Satz ohnehin folgt.
-- Höchstens ca. 25 Wörter, keine Ich-/Wir-Form, keine Klammerverweise hinzufügen oder entfernen.
+- Höchstens ca. 12 Wörter, keine Ich-/Wir-Form, keine Klammerverweise hinzufügen oder entfernen.
 - Keine zwei Besprechungen mit demselben Satzanfang.
 - "id" wie vorgegeben, "sentence": der neue erste Satz.
 
@@ -369,7 +371,8 @@ Die statistische Würdigung in 2–3 einfachen Sätzen (ausnahmsweise 4, wenn so
 ginge), danach genau ein Satz zur Qualität der Studie \
 aus statistischer Sicht (z.B. "Aus statistischer Sicht ist die Studie gut belastbar, weil …"). Keine \
 Metabemerkungen über die Quelle ("im Abstract nicht angegeben"). Schlussfolgerung der Autoren und Fazit im Indikativ, ohne Konjunktivketten; keine angehängten \
-Satzfragmente. Nicht gendern (generisches Maskulinum, keine Sternchen oder Doppelnennungen). \
+Satzfragmente (Ausnahme: das Fazit für die Praxis darf knappe Nominalsätze enthalten, z.B. \
+"Hochwertige Studie, klares Ergebnis."; es bleibt kurz, nicht verlängern). Nicht gendern (generisches Maskulinum, keine Sternchen oder Doppelnennungen). \
 Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser Studie …"), bei Metaanalysen und \
 Reviews abwechseln. Grammatik prüfen (Subjekt-Verb-Kongruenz, z.B. "Erwachsene, die … ansprachen"). \
 Dabei nichts weglassen und keine neue Bewertung hinzufügen.
@@ -435,27 +438,36 @@ def sota_from_intro_prompt(topic: str, sources: list[tuple[str, str, str]],
     if guidelines:
         gl = "\n\nAktuelle Leitlinien zum Thema (Auszüge):\n\n" + "\n\n".join(
             f"--- {n} ---\n{t}" for n, t in guidelines)
-    return f"""Erstelle für das Thema „{topic}“ einen kurzen Abschnitt „State of the Art“ auf englischer \
-Sprache. Er steht im Manuskript direkt vor der Besprechung der Publikationen dieses Themas und führt \
-wie ein Trichter vom Gesamtthema zu ihrer gemeinsamen Fragestellung hin.
+    return f"""Schreibe für das Thema „{topic}“ einen kurzen Abschnitt „State of the Art“ in englischer \
+Sprache für ein medizinisches Fachpublikum. Er steht im Manuskript direkt vor der Besprechung der \
+Publikationen dieses Themas und ist eine prägnante Hinleitung: vom klinischen oder wissenschaftlichen \
+Kontext gezielt zur zentralen Fragestellung dieser Publikationen. Bei mehreren Publikationen führt er zu \
+ihrer gemeinsamen Frage, bei einer Publikation zu deren Frage.
 
-Aufbau (3 bis 5 Sätze):
-1. Ein Satz zum Gesamtthema, wie es die Überschrift nennt (z.B. die Erkrankung): Bedeutung und \
-etablierter Standard der Diagnostik bzw. Therapie. Noch nicht das Verfahren der Studien.
-2. Ein bis zwei Sätze zur Entwicklung der letzten Jahre bei den Verfahren bzw. Strategien dieses \
-Themas: Welche Ansätze gibt es, hat sich eines durchgesetzt oder wird es in Leitlinien empfohlen, wo \
-liegen ihre Grenzen? Beschreibe das Feld, nicht nur das Verfahren der ersten Publikation.
-3. Ein Satz zur offenen Frage bzw. Evidenzlücke, so allgemein formuliert, dass er zu ALLEN unten \
-genannten Publikationen passt.
+Der Kern ist der Knackpunkt: Arbeite präzise heraus, WARUM die Frage dieser Publikationen für das Fach \
+relevant ist und WARUM sie gerade jetzt aktuell ist, z.B. ein neues Verfahren, das sich verbreitet, aber \
+noch nicht ausreichend geprüft ist; eine Kontroverse oder offene Therapieentscheidung; widersprüchliche \
+Daten; eine geänderte oder fehlende Leitlinienempfehlung; eine ungelöste klinische Abwägung. Benenne \
+diesen Punkt konkret, nicht allgemein („weitere Studien sind nötig“ reicht nicht).
+
+Aufbau (Fließtext, 2 bis 4 Sätze, meist genügen 3):
+1. Thema und seine Bedeutung für Klinik, Versorgung oder Forschung, mit dem etablierten Standard.
+2. Knapp der bisherige Kenntnisstand bzw. die Entwicklung der letzten Jahre, soweit sie zum Verständnis \
+dieser Publikationen nötig ist.
+3. Der Knackpunkt: die konkrete Lücke, Kontroverse oder offene Entscheidung und warum sie jetzt zählt. \
+Damit leitest du unmittelbar zur Frage der folgenden Publikationen über.
 
 Regeln:
-- Insgesamt ca. 70 bis 120 Wörter, jeder Satz höchstens ca. 30 Wörter.
+- So kurz wie möglich, so ausführlich wie für eine klare Einordnung nötig: höchstens ca. 100 Wörter, \
+jeder Satz höchstens ca. 30 Wörter. Immer Fließtext, keine Stichpunkte, keine Zwischenüberschriften.
+- Bleibe sachlich und fachlich präzise. Keine Allgemeinplätze, keine unnötigen Hintergrundinformationen, \
+keine Wiederholungen.
 - Grundlage sind ausschließlich die Einleitungen der Publikationen und die Leitlinien unten. Jede \
-Aussage muss dort belegt sein. Ob sich ein Verfahren durchgesetzt hat, nur schreiben, wenn eine \
-Einleitung oder Leitlinie das so sagt; sonst die Aussage weglassen.
+Aussage muss dort belegt sein. Erfinde keine Fakten, Zahlen, Empfehlungen oder Forschungslücken. Ob \
+sich ein Verfahren durchgesetzt hat, nur schreiben, wenn eine Einleitung oder Leitlinie das so sagt. \
+Reicht der Kontext für den Knackpunkt nicht, formuliere zurückhaltend.
 - Formuliere eigenständig und fachsprachlich um; übernimm keine Sätze wörtlich.
 - Nimm keine Ergebnisse oder Schlussfolgerungen der Studien vorweg und nenne die Studien selbst nicht.
-- Zahlen nur, wenn sie so in einer Einleitung oder Leitlinie stehen. Erfinde nichts hinzu.
 - Arzneimittel nur mit Wirkstoffnamen. Keine Markdown-Formatierung.
 
 Literaturverweise:

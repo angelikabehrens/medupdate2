@@ -562,6 +562,21 @@ Kritische Würdigung:
     return prompt
 
 
+FAZIT_KURZ_REGEL = """FAZIT FÜR DIE PRAXIS KURZ UND PRÄGNANT (Wunsch der Autorin): Das Fazit ist die \
+Essenz, keine Zusammenfassung der Würdigung. 1 bis 3 kurze Sätze, meist 2, höchstens ca. 40 Wörter:
+1. Zuerst einmal die Studienqualität, OHNE Begründung (z.B. "Hochwertige Studie, klares Ergebnis.", \
+"Methodisch solide Registerstudie.", "Kleine Studie mit begrenzter Aussagekraft.").
+2. Dann die Antwort, ob das Ergebnis die klinische Praxis verändern wird: ja / unter welchen Umständen \
+bzw. für wen / noch nicht / nein (z.B. "Keine Veränderung unseres aktuellen Vorgehens in der klinischen \
+Praxis.").
+Keine Wiederholung von Zahlen, Endpunkten, Methodik, Limitationen oder Neuheit aus der Würdigung; keine \
+Begründung der Qualitätsaussage. Knappe Nominalsätze wie im Beispiel sind hier ausdrücklich erlaubt \
+(Ausnahme von der Regel gegen Satzfragmente). Beispiel: "Hochqualitative Studie, klares Ergebnis. Keine \
+Veränderung unseres aktuellen Vorgehens in der klinischen Praxis." Die Praxisaussage folgt aus Qualität \
+und Ergebnis: Eingeschränkt valide Ergebnisse führen zu "noch nicht" oder "unter bestimmten Umständen", \
+nicht zu "ja"."""
+
+
 def skill_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
     target_words = SKILL_LAENGEN_STUFEN[tier]
     ziel_sprache = "englischer" if sprache_kw == "Englisch" else "deutscher"
@@ -587,9 +602,8 @@ Autoren:" (deren Wortlaut MIT Hedging, alle Teilaussagen der Schlussfolgerung en
 2. Würdigung (ca. 58%): Fließtext OHNE Zwischenüberschriften, in 2-3 Absätzen: erst Neuheit, dann \
 Validität (Stärken, Limitationen mit Bias-Richtung, Gesamturteil), dann Einordnung und Bedeutung \
 für die Praxis inkl. Übertragbarkeit.
-3. "{fazit_label}:" (ca. 12%): eigener, sichtbar abgesetzter Absatz, beginnt mit fettem \
-"{fazit_label}:". Beantwortet in 2-3 Sätzen: Ist das Ergebnis neu? Ist es valide? Ändert es die \
-Praxis, und für wen (ja / für definierte Subgruppe / noch nicht / nein)?
+3. "{fazit_label}:" (ca. 5%): eigener, sichtbar abgesetzter Absatz, beginnt mit fettem \
+"{fazit_label}:". Kurz und prägnant nach der Regel FAZIT FÜR DIE PRAXIS KURZ UND PRÄGNANT unten.
 
 KEIN persönlicher Kommentar: keine Ich-Aussagen, keine subjektiven Erfahrungsberichte."""
     elif tier == "1,5 Seiten (Lang)":
@@ -600,8 +614,8 @@ KEIN persönlicher Kommentar: keine Ich-Aussagen, keine subjektiven Erfahrungsbe
 (~24%), Einordnung mit bisheriger Evidenz/Leitlinien (~10%), Bedeutung für die Praxis (~10%).
 3. "{kommentar_label}:" (ca. 12%): persönliche, klinisch begründete Einschätzung, eigener Absatz, \
 beginnt mit fettem "{kommentar_label}:".
-4. "{fazit_label}:" (ca. 11%): eigener Absatz, beginnt mit fettem "{fazit_label}:", beantwortet wie \
-oben beschrieben die Leitfrage."""
+4. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit fettem "{fazit_label}:", kurz und prägnant \
+nach der Regel FAZIT FÜR DIE PRAXIS KURZ UND PRÄGNANT unten."""
     else:  # 2 Seiten
         aufbau = f"""Aufbau in drei Blöcken. KEIN Abstract-Block – der Original-Abstract wird von \
 der Anwendung separat und unverändert vorangestellt, nicht von dir erzeugt. Beginne direkt mit der \
@@ -614,13 +628,12 @@ und Bedeutung für die klinische Praxis.
 2. "{kommentar_label}:" – eigener, sichtbar abgesetzter Absatz, beginnt mit fettem "{kommentar_label}:". \
 Umfang WIE IM ORIGINAL (2-3 Sätze) – NICHT ausbauen, nur bei Bedarf leicht sprachlich straffen.
 3. "{fazit_label}:" – eigener, sichtbar abgesetzter Absatz, beginnt mit fettem "{fazit_label}:". \
-VOLLSTÄNDIG UND WORTGLEICH aus der Originalfassung übernehmen – NICHT kürzen, NICHT umformulieren, \
-auch wenn dadurch der Zielumfang überschritten wird."""
+Inhaltlich aus der Originalfassung, aber kurz und prägnant nach der Regel FAZIT FÜR DIE PRAXIS KURZ \
+UND PRÄGNANT unten; Qualitätsurteil und Praxisaussage nicht verändern."""
 
     zielumfang_zeile = (
         f"""Zielumfang: ca. {target_words} Wörter für Würdigung und "{kommentar_label}" zusammen \
-(Stufe „{tier}"). Das "{fazit_label}"-Feld zählt NICHT zu diesem Zielumfang, da es unverändert aus der \
-Originalfassung übernommen wird. Ohne Studienüberschrift, Themenzeile und Literaturliste."""
+(Stufe „{tier}"). Das kurze "{fazit_label}"-Feld zählt NICHT zu diesem Zielumfang. Ohne Studienüberschrift, Themenzeile und Literaturliste."""
         if tier == "2 Seiten"
         else f"""Zielumfang: ca. {target_words} Wörter (Stufe „{tier}"). Zählbasis: alle Wörter vom \
 ersten Textabsatz bis einschließlich {fazit_label}, ohne Studienüberschrift, Themenzeile und \
@@ -636,8 +649,7 @@ Fortbildung. Schreibe auf {ziel_sprache} Sprache.
 {aufbau}
 
 Leitfrage (muss in jeder Stufe erkennbar beantwortet werden – implizit im Fließtext bei "½ Seite \
-(Kurz)", ausdrücklich im {fazit_label}-Absatz bei "1 Seite", "1,5 Seiten (Lang)" und "2 Seiten" – bei \
-"2 Seiten" ergibt sich das automatisch, da dieser Absatz unverändert übernommen wird):
+(Kurz)", sonst Neuheit in der Würdigung, Validität und Praxis knapp im {fazit_label}-Absatz):
 1. Liefert die Studie bisher nicht bekannte Ergebnisse?
 2. Sind diese Ergebnisse valide?
 3. Sollten sie die klinische Praxis verändern, und wenn ja, für wen?
@@ -738,10 +750,10 @@ abwechseln, nicht durchgehend so.
 sind (z.B. "Für Patienten, die … möchten, bleiben etablierte Optionen …"); solche Passagen streichen, \
 auch wenn sie in der Vorlage stehen.
 
-FAZIT ABWECHSLUNGSREICH: Beginne das Fazit für die Praxis nicht mit einer Standardformel wie "Das \
-Ergebnis ist neu." bzw. "The result is new.", sondern konkret zur Studie, z.B. "Diese Studie zeigt \
-erstmals, dass …", "Erstmals liegt ein randomisierter Vergleich zu … vor", "Die Arbeit bestätigt …", \
-"Neu ist vor allem …" – inhaltlich unverändert (neu / bestätigend / hypothesengenerierend).
+{FAZIT_KURZ_REGEL if tier != "½ Seite (Kurz)" else "Bei dieser Stufe gibt es keinen eigenen Fazit-Absatz."}
+Formuliere das Qualitätsurteil am Anfang des Fazits passend zur Studie und nicht immer gleich \
+(z.B. "Hochwertige randomisierte Studie, klares Ergebnis.", "Große, sorgfältige Registerstudie.", \
+"Methodisch begrenzte Pilotstudie.").
 - Wesentliche Inhalte bleiben erhalten: Was für die Leitfrage, die Validität oder die Praxis zählt, \
 wird nicht gestrichen, sondern nur einfacher formuliert. Zahlen, die du übernimmst, bleiben exakt. Vermeide die Ich-/Wir-Form der Originalautoren (siehe getrennte \
 Stilvorgabe, sofern bereits angewendet).
@@ -951,6 +963,9 @@ Prüfbitten. Eine Aussage, die du nicht mit einer gefundenen Quelle belegen kann
     return prompt
 
 
+_FAZIT_JOINT = FAZIT_KURZ_REGEL.replace("FÜR DIE PRAXIS", "(GEMEINSAMES FAZIT)")
+
+
 def joint_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
     """Kürzung einer gemeinsamen Würdigung mehrerer Publikationen (aus MyLuo, Schritt 4B)."""
     en = sprache_kw == "Englisch"
@@ -978,8 +993,8 @@ Evidenzstufe.
 2. Fließtext aus "{verknuepfung_label}" und "{wuerdigung_label}" zusammengefasst (ca. 60%), OHNE \
 Zwischenüberschriften, in 2-3 Absätzen: erst die Einordnung der Verknüpfung (zulässig/nicht \
 zulässig), dann die wichtigsten methodischen Stärken/Schwächen über die Publikationen hinweg.
-3. "{fazit_label}:" (ca. 15%): eigener Absatz, beginnt mit "{fazit_label}:". Gewichtet die \
-unterschiedliche Evidenzqualität der Einzelpublikationen ausdrücklich."""
+3. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit "{fazit_label}:". Kurz und prägnant: \
+zuerst die Qualität der Evidenz insgesamt ohne Begründung, dann die Praxisaussage (siehe Regel unten)."""
     else:
         tier = "1,5 Seiten (Lang)"
         aufbau = f"""Aufbau in vier Blöcken:
@@ -988,8 +1003,8 @@ unterschiedliche Evidenzqualität der Einzelpublikationen ausdrücklich."""
 NICHT zulässig wäre.
 3. "{wuerdigung_label}" (ca. 35%): Fließtext, wichtigste methodische Stärken/Schwächen über die \
 Publikationen hinweg.
-4. "{fazit_label}:" (ca. 15%): eigener Absatz, beginnt mit "{fazit_label}:", gewichtet die \
-unterschiedliche Evidenzqualität weiterhin ausdrücklich."""
+4. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit "{fazit_label}:", kurz und prägnant wie \
+bei "1 Seite" (siehe Regel unten)."""
     target_words = SKILL_LAENGEN_STUFEN[tier]
     return f"""Du bist wissenschaftlicher Redakteur und kürzt eine bereits erstellte gemeinsame \
 kritische Würdigung mehrerer Publikationen zu einer Fragestellung, für eine ärztliche Fortbildung. \
@@ -1015,6 +1030,8 @@ Stil: kurze, klare Sätze (möglichst höchstens 20–25 Wörter), eine Hauptaus
 Schachtelsätze. Sparsam mit Statistik: Hauptergebnisse mit Effektgröße und 95%-Konfidenzintervall, \
 Nebenergebnisse in Worten, höchstens zwei Zahlenangaben pro Satz. Wesentliche Inhalte bleiben erhalten. \
 Kein Telegrammstil, keine Aufzählungen im Fließtext.
+
+{_FAZIT_JOINT}
 
 Ausgabe: Gib ausschließlich den fertigen Text aus, ohne Literaturliste, ohne Erläuterung des Vorgehens.
 

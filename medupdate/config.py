@@ -6,7 +6,7 @@ import streamlit as st
 # MODEL_MAIN: anspruchsvolle Schritte (kritische Würdigung, State of the Art, Literaturauswahl).
 # MODEL_FAST: Massenarbeit mit klarer Vorgabe (Übersetzung, Rechtschreibung, Extraktion).
 # Stand des Programms, in der Seitenleiste angezeigt (bei jeder Änderung hochzählen)
-APP_VERSION = "2026-10-14.2"
+APP_VERSION = "2026-10-14.4"
 
 MODEL_MAIN = "claude-opus-5-5"
 MODEL_FAST = "claude-sonnet-5-5"
