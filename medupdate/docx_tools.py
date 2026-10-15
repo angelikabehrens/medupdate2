@@ -63,6 +63,11 @@ _SKILL_BOLD_LABELS = [
 # Kasten („BlockText“) steht, Label fett statt unterstrichen (Wunsch der Autorin, 2026-10-13)
 BOX_LABELS = ("Kommentar:", "Fazit für die Praxis:", "Comment:", "Conclusion for Practice:")
 BOX_FILL = "D9D9D9"
+# Marke am Anfang der Titelzeile (Heading 2) einer Kurznachricht: Kurznachrichten stehen im fertigen Manuskript
+# als Block ohne eigene Titelzeilen (Vorbild Decker, 2026-10-15); die Zeile wird nach der Literatur-
+# Zusammenführung entfernt (formal.collapse_kurznachrichten)
+KURZ_MARK = "Kurznachricht · "
+KURZ_HEADINGS = {"Deutsch": "Kurznachrichten", "Englisch": "Short reports"}
 
 
 def shade_paragraph(p, fill: str = BOX_FILL) -> None:
@@ -506,6 +511,9 @@ def copy_document_content_into_template(
             # der Studie" innerhalb einer noch nicht gekürzten Würdigung dürfen NICHT
             # als Literatureintrag missverstanden werden).
             new_p = template_doc.add_paragraph(text_stripped, style=biblio_style)
+            if any(r.bold for r in para.runs if r.text.strip()):  # Schlüsselstudien fett (2026-10-15)
+                for r in new_p.runs:
+                    r.bold = True
             # Auch "Biblio" hat einen hängenden Einzug für "Nummer.<TAB>Text" – unsere
             # Einträge haben nach der Nummer nur ein Leerzeichen statt Tab, daher würde
             # eine umgebrochene Zeile sonst weit eingerückt erscheinen.

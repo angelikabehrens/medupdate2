@@ -317,6 +317,16 @@ weglassen, auch wenn sie in der Vorlage stehen. Nur selten verwendete Begriffe k
 Doppelnennungen.
 - Grammatik prüfen, besonders die Kongruenz von Subjekt und Verb ("63 Erwachsene, die auf PPI \
 ansprachen").
+- Sprachstil nach dem Vorbild der Autorin: Jeder Satz knüpft mit Konnektor oder Rückverweis an den \
+vorigen an ("Hierfür", "Hierbei", "Zudem", "Jedoch", "Dennoch", "somit", "wenngleich", "Zugleich"); \
+Gleichgerichtetes bündeln ("sowohl … als auch"). Sätze bis 30 Wörter sind erlaubt, wenn sie einen \
+Gedanken tragen; keine Schachtelsätze. Die Studie konkret benennen (Akronym, Land, Phase, Design: \
+"die spanische COLONPREV-Studie" statt "in einer Studie"). Verben abwechseln ("befasste sich mit", \
+"widmete sich", "ging der Frage nach", "lieferte Daten zu"; "schlussfolgern", "konkludieren"). Erst \
+die Aussage in Worten, dann die Zahl in Klammern. Bewertung kalibriert: klar bei Phase III mit hartem \
+Endpunkt, mit "wenngleich … (Grund)" bei Phase II, einarmig, Register oder Surrogat. Wir-Form nur im \
+Ausblick des Kommentars ("Wir dürfen gespannt sein"); Ausrufezeichen nur im Kommentar bei \
+praxisveränderndem Ergebnis, höchstens eines; sonst keine. Höchstens eine bildhafte Wendung je Text.
 
 Klammerverweise wie "(1)" oder "(2,3)" bleiben exakt an derselben Stelle im Satz stehen. Absatzstruktur \
 beibehalten (eine Zeile pro Absatz). Schreibe gut lesbare deutsche Sätze: Einen langen, verschachtelten \
@@ -376,6 +386,16 @@ Satzfragmente (Ausnahme: das Fazit für die Praxis darf knappe Nominalsätze ent
 Einleitungssatz bei Originalstudien mit bestimmtem Artikel ("In dieser Studie …"), bei Metaanalysen und \
 Reviews abwechseln. Grammatik prüfen (Subjekt-Verb-Kongruenz, z.B. "Erwachsene, die … ansprachen"). \
 Dabei nichts weglassen und keine neue Bewertung hinzufügen.
+- Sprachstil nach dem Vorbild der Autorin: Jeder Satz knüpft mit Konnektor oder Rückverweis an den \
+vorigen an ("Hierfür", "Hierbei", "Zudem", "Jedoch", "Dennoch", "somit", "wenngleich", "Zugleich"); \
+Gleichgerichtetes bündeln ("sowohl … als auch"). Sätze bis 30 Wörter sind erlaubt, wenn sie einen \
+Gedanken tragen; keine Schachtelsätze. Die Studie konkret benennen (Akronym, Land, Phase, Design: \
+"die spanische COLONPREV-Studie" statt "in einer Studie"). Verben abwechseln ("befasste sich mit", \
+"widmete sich", "ging der Frage nach", "lieferte Daten zu"; "schlussfolgern", "konkludieren"). Erst \
+die Aussage in Worten, dann die Zahl in Klammern. Bewertung kalibriert: klar bei Phase III mit hartem \
+Endpunkt, mit "wenngleich … (Grund)" bei Phase II, einarmig, Register oder Surrogat. Wir-Form nur im \
+Ausblick des Kommentars ("Wir dürfen gespannt sein"); Ausrufezeichen nur im Kommentar bei \
+praxisveränderndem Ergebnis, höchstens eines; sonst keine. Höchstens eine bildhafte Wendung je Text.
 - Gib NUR den überarbeiteten Text aus.
 
 Text:
@@ -499,7 +519,7 @@ stehen ihre früheren Manuskripte und die Publikationen, die sie im neuen Manusk
 Suche höchstens {max_refs} Stellen, an denen ein inhaltlicher Rückbezug auf ein früheres Manuskript \
 für die Leser wirklich sinnvoll ist: Das frühere Manuskript hat eine Publikation oder ein Ergebnis zur \
 selben klinischen Frage besprochen, und die neue Publikation bestätigt, ergänzt, widerlegt oder führt \
-es weiter. Lieber keinen Rückbezug als einen gezwungenen. Gibt es keinen sinnvollen, gib eine leere \
+es weiter. Lieber keinen Rückbezug als einen gezwungenen. Höchstens EIN Rückbezug je Thema. Gibt es keinen sinnvollen, gib eine leere \
 Liste zurück.
 
 Je Rückbezug:
@@ -594,3 +614,54 @@ Style: short, clear sentences (about 20-25 words at most), one main point per se
 statistics (main results with effect size and 95% CI).
 
 {blocks}"""
+
+
+def topic_comment_prompt(topic: str, items: list[tuple[str, str]], guidelines: list[tuple[str, str]] | None = None) -> str:
+    """Gemeinsamer Kommentar für 2–4 kurz gewürdigte Publikationen eines Themas (Vorbild Decker: ein Kommentar
+    fasst mehrere Studien zusammen). items: [(Titel, gekürzte englische Würdigung)]."""
+    its = "\n\n".join(f"=== Publikation {i} ===\nTitel: {t}\n{x}" for i, (t, x) in enumerate(items, start=1))
+    gl = ""
+    if guidelines:
+        gl = "\n\nLeitlinienauszüge (nur verwenden, was hier steht; nichts ergänzen):\n" + "\n\n".join(
+            f"--- {n} ---\n{t}" for n, t in guidelines)
+    return f"""Du schreibst für ein ärztliches Fortbildungshandbuch EINEN gemeinsamen Kommentar zu den unten stehenden \
+kurz gewürdigten Publikationen des Themas „{topic}“. Der Kommentar steht nach den Einzeldarstellungen und ordnet \
+sie gemeinsam ein.
+
+AUFBAU in vier Bausteinen als Fließtext ohne Zwischenüberschriften, insgesamt 4 bis 7 Sätze (höchstens ca. 130 \
+Wörter):
+1. Zusammenschau: Was zeigen die Studien zusammen, wo stützen oder widersprechen sie sich (Studien konkret \
+benennen, z.B. Akronym oder „die niederländische Kohortenstudie“).
+2. Leitlinienbezug: nur, wenn die Leitlinienauszüge dazu etwas sagen; sonst entfällt dieser Baustein.
+3. „Für die klinische Praxis bedeutet dies …“: eine klare, kalibrierte Aussage; Zulassungs- oder Off-label-Status \
+nur, wenn er in den Texten steht.
+4. Ausblick: ein Satz, was offen bleibt oder zu erwarten ist. Hier ist die Wir-Form erlaubt („Wir erwarten …“).
+
+REGELN: Kurze Sätze (bis 30 Wörter), Konnektoren (hierbei, somit, jedoch, wenngleich). Bewertung kalibriert: starke \
+Worte nur für belastbare Evidenz. Keine Zahlen wiederholen, die in den Einzeldarstellungen stehen; höchstens eine \
+Zahl insgesamt. KEINE Literaturziffern oder Klammerverweise, keine Aufzählung, keine Labels, kein Gendern. \
+Höchstens ein Ausrufezeichen, nur bei wirklich praxisveränderndem Ergebnis. Nichts erfinden: nur, was in den \
+Texten und Leitlinienauszügen steht.
+
+Gib ein JSON-Objekt: "comment_de" (deutsch) und "comment_en" (dieselbe Aussage auf Englisch).
+
+{its}{gl}"""
+
+
+def transitions_prompt(topic: str, items: list[tuple[str, str, str]], max_n: int) -> str:
+    """Gelegentliche Überleitungen zwischen den Publikationen eines Themas (Vorbild Decker: „Von der Chemotherapie
+    kommen wir zur Chirurgie“). items: [(id, Titel, erster Absatz der Würdigung)] in Manuskript-Reihenfolge."""
+    its = "\n\n".join(f"- id {i} | {t}\n  Beginn: {x[:600]}" for i, t, x in items)
+    return f"""Die folgenden Publikationen werden in dieser Reihenfolge im Thema „{topic}“ eines ärztlichen \
+Fortbildungshandbuchs besprochen. Finde höchstens {max_n} Stellen, an denen EIN kurzer Überleitungssatz vor \
+einer Publikation den Lesefluss verbessert, weil es einen echten inhaltlichen Bezug zur vorherigen Publikation \
+gibt (gleiche Frage aus anderer Richtung, Wechsel des Verfahrens, Gegenbefund). Überleitungen nur gelegentlich, \
+nicht bei jeder Publikation und nie vor der ersten. Lieber keine als eine gezwungene; dann leere Liste.
+
+Je Überleitung: "pub_id" (die id der Publikation, VOR der der Satz steht), "de": EIN deutscher Satz mit höchstens \
+20 Wörtern, Wir-Form erlaubt („Von der Systemtherapie kommen wir zur Chirurgie.“, „Vor demselben Hintergrund \
+untersuchte eine zweite Arbeitsgruppe …“), "en": derselbe Satz auf Englisch. Keine Literaturziffern, keine Zahlen, \
+kein Gendern, nichts behaupten, was nicht in den Textanfängen steht.
+
+Publikationen:
+{its}"""

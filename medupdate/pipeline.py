@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import re
 import threading
@@ -36,8 +37,10 @@ from .references import make_formatter
 
 
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
-# erklärt, abwechslungsreiches Fazit (2026-10-11); 9 = kurzes Fazit: Qualität ohne Begründung + Praxisaussage (2026-10-14)
-SHORT_VERSION = 9
+# erklärt, abwechslungsreiches Fazit (2026-10-11); 9 = kurzes Fazit: Qualität ohne Begründung + Praxisaussage (2026-10-14);
+# 10 = Sprachstil nach dem Vorbild Decker: Hinleitung aus der Einleitung, Konnektoren, Kommentar in vier Bausteinen,
+# Kurznachricht mit "(1)" hinter der Studie (2026-10-15)
+SHORT_VERSION = 10
 MAX_GROUP_SIZE = 5  # gemeinsame Würdigung von bis zu 5 Publikationen (Angelika 2026-10-13)
 GROUP_VERSION = 3  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 
@@ -877,8 +880,9 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         if d.get("group"):
             return A.shorten_joint(llm, d["body_en"], proj["tiers"][p], "Englisch", max_ext=ext_budget,
                                    compact=compact)
+        intro = A.split_intro(d["full_text"])[0] if d.get("full_text") else ""
         return A.shorten(llm, d["body_en"], proj["tiers"][p], "Englisch", rec.get("abstract", ""),
-                         max_ext=ext_budget, compact=compact)
+                         max_ext=ext_budget, compact=compact, intro=intro if len(intro) >= 300 else "")
 
     log("Würdigungen werden auf die geplanten Längen gekürzt…")
     for p, res in _parallel(todo, shorten, log, "Kürzung").items():
@@ -999,6 +1003,24 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             except Exception as ex:
                 _err(proj, "Rückbezüge auf frühere Manuskripte", ex)
 
+    # 7c. Gemeinsamer Kommentar für 2–4 kurz gewürdigte Publikationen eines Themas (Vorbild Decker)
+    if options.get("topic_comment", True):
+        try:
+            topic_comments(llm, proj, ready, log)
+        except AccountError:
+            raise
+        except Exception as ex:
+            _err(proj, "Gemeinsame Kommentare", ex)
+
+    # 7d. Gelegentliche Überleitungen zwischen den Publikationen eines Themas (Vorbild Decker)
+    if options.get("transitions", True):
+        try:
+            find_transitions(llm, proj, ready, log)
+        except AccountError:
+            raise
+        except Exception as ex:
+            _err(proj, "Überleitungen", ex)
+
     # 9. Manuskripte zusammensetzen, Literatur zusammenführen, Formatvorlage, formale Prüfung
     log("Gesamtmanuskript wird zusammengesetzt und formal geprüft…")
     rules = proj.get("rules") or {}
@@ -1015,6 +1037,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         de = {}
     for lang in ("Deutsch", "Englisch"):
         blocks = []
+        key_refs = []  # Hauptquellen der ausführlich gewürdigten Publikationen: fett im Literaturverzeichnis
+        lk = "de" if lang == "Deutsch" else "en"
         tr = (lambda x: de.get(x, x)) if lang == "Deutsch" else (lambda x: x)
         for tid in topic_ids:
             t = proj["topics"][tid]
@@ -1024,7 +1048,9 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             for k in ("section", "subsection"):
                 if g.get(k):
                     g[k] = (g[k][0], tr(g[k][1]))
-            block = {"topic": tr(t["title"]), "sota": sota_block, "pubs": [], **g}
+            block = {"topic": tr(t["title"]), "sota": sota_block, "pubs": [], **g,
+                     "comment": (t.get("topic_comment") or {}).get(lk) if options.get("topic_comment", True) else None}
+            transitions = (t.get("transitions") or {}).get("items", {}) if options.get("transitions", True) else {}
             for p, tt in ready:
                 if tt != tid:
                     continue
@@ -1042,16 +1068,23 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                 text, lit = reconcile_local_citations(text, d["literature"], protected_count=max(1, len(members)))
                 if members:
                     rec = dict(rec, title=d["title_de" if lang == "Deutsch" else "title_en"])
+                if proj["tiers"].get(p) in LONG_TIERS:
+                    key_refs.extend(lit[: max(1, len(members))])
+                lines = [_strip_stray_label(l) for l in text.split("\n") if l.strip()]
+                if (transitions.get(p) or {}).get(lk):
+                    lines = prepend_transition(lines, transitions[p][lk])
                 block["pubs"].append({"title": rec.get("title", p), "rec": rec, "abstract": abstract,
                                       "recs": [proj["records"].get(m, {}) for m in members],
-                                      "lines": [_strip_stray_label(l) for l in text.split("\n") if l.strip()],
+                                      "lines": lines,
                                       "literature": lit,
+                                      "kurz": proj["tiers"].get(p) == "Kurznachricht",
                                       "figure": None})
             blocks.append(block)
         raw = build_docx(tr(title), blocks, lang)
         key = "DE" if lang == "Deutsch" else "EN"
         try:
-            befunde, final = run_formal_check(raw, llm if lang == "Deutsch" else None, template, rules, formatter)
+            befunde, final = run_formal_check(raw, llm if lang == "Deutsch" else None, template, rules, formatter,
+                                              bold_refs=key_refs)
         except Exception as ex:
             _err(proj, f"Formale Prüfung {key}", ex)
             befunde, final = [], raw
@@ -1390,25 +1423,150 @@ def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> lis
     return out
 
 
-OWN_REFS_MAX = 2
+OWN_REFS_MAX = 2  # Mindestzahl; tatsächlich höchstens einer je Thema, siehe own_refs_limit (2026-10-15)
+OWN_REFS_CAP = 12
+
+
+def own_refs_limit(n_topics: int) -> int:
+    return min(OWN_REFS_CAP, max(OWN_REFS_MAX, n_topics))
+
+
 OWN_REFS_SCHEMA = obj({"refs": arr(obj({"pub_id": STR, "manuscript": STR, "sentence_de": STR,
                                         "sentence_en": STR}))})
 
 
 def find_own_refs(llm: LLM, proj: dict, ready: list[tuple[str, str]]) -> dict[str, dict]:
-    """Ein KI-Aufruf über alle früheren Manuskripte und alle Publikationen: höchstens OWN_REFS_MAX
-    Rückbezüge {pub_id: {"manuscript", "de", "en"}}."""
+    """Ein KI-Aufruf über alle früheren Manuskripte und alle Publikationen: höchstens ein Rückbezug je Thema
+    (insgesamt own_refs_limit) {pub_id: {"manuscript", "de", "en"}}. Vorbild Decker: zehn Rückbezüge auf
+    frühere Ausgaben in einem Kapitel (2026-10-15)."""
     manuscripts = [(n, t[:15000]) for n, t in list(proj["style"].items())[:4]]
+    topic_of = {p: t for p, t in ready}
+    limit = own_refs_limit(len(set(topic_of.values())))
     pubs = [{"id": p, "topic": proj["topics"][t]["title"], "title": proj["records"].get(p, {}).get("title", p),
              "summary": " ".join((proj["pubs"][p].get("short_en") or "").split())[:500]} for p, t in ready]
-    res = llm.json(P.own_refs_prompt(manuscripts, pubs, OWN_REFS_MAX), OWN_REFS_SCHEMA, model=MODEL_MAIN,
-                   max_tokens=4000, effort="medium")
-    out = {}
+    res = llm.json(P.own_refs_prompt(manuscripts, pubs, limit), OWN_REFS_SCHEMA, model=MODEL_MAIN,
+                   max_tokens=6000, effort="medium")
+    out, used_topics = {}, set()
     for r in res.get("refs", []):
-        if r.get("pub_id") in proj["pubs"] and r.get("sentence_de", "").strip() and len(out) < OWN_REFS_MAX:
-            out[r["pub_id"]] = {"manuscript": r.get("manuscript", ""), "de": r["sentence_de"].strip(),
-                                "en": r.get("sentence_en", "").strip()}
+        pid = r.get("pub_id")
+        if pid in proj["pubs"] and r.get("sentence_de", "").strip() and len(out) < limit \
+                and topic_of.get(pid) not in used_topics:
+            used_topics.add(topic_of.get(pid))
+            out[pid] = {"manuscript": r.get("manuscript", ""), "de": r["sentence_de"].strip(),
+                        "en": r.get("sentence_en", "").strip()}
     return out
+
+
+def _text_sig(text: str | None) -> str:
+    """Kurze Kennung eines Textes für Cache-Schlüssel (ändert sich der Text, wird neu erzeugt)."""
+    text = text or ""
+    return f"{len(text)}:{hashlib.md5(text.encode('utf-8')).hexdigest()[:10]}"
+
+
+TOPIC_COMMENT_SCHEMA = obj({"comment_de": STR, "comment_en": STR})
+TRANSITIONS_SCHEMA = obj({"transitions": arr(obj({"pub_id": STR, "de": STR, "en": STR}))})
+LONG_TIERS = ("1 Seite (Lang)", "1,5 Seiten (Lang)", "2 Seiten")
+
+
+def topic_comments(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> None:
+    """Ein gemeinsamer Kommentar je Thema mit 2–4 kurz gewürdigten Publikationen (½ Seite), sofern dort keine
+    ausführliche Würdigung mit eigenem Kommentar steht (Entscheidung der Autorin 2026-10-15, Vorbild Decker).
+    Ergebnis in proj["topics"][tid]["topic_comment"] = {"key", "de", "en"}; Cache über die beteiligten Texte."""
+    todo = []
+    for tid in dict.fromkeys(t for _, t in ready):
+        ids = [p for p, t in ready if t == tid]
+        short = [p for p in ids if proj["tiers"].get(p) == "½ Seite (Kurz)" and proj["pubs"][p].get("short_en")]
+        has_long = any(proj["tiers"].get(p) in LONG_TIERS for p in ids)
+        t = proj["topics"][tid]
+        if not (2 <= len(short) <= 4) or has_long or t.get("varia"):
+            t.pop("topic_comment", None)
+            continue
+        key = [SHORT_VERSION] + [(p, _text_sig(proj["pubs"][p].get("short_en"))) for p in short]
+        if (t.get("topic_comment") or {}).get("key") != key:
+            todo.append((tid, (tid, short, key)))
+
+    def work(item):
+        tid, short, key = item
+        title = proj["topics"][tid]["title"]
+        items = [(proj["records"].get(p, {}).get("title", p), proj["pubs"][p]["short_en"]) for p in short]
+        res = llm.json(P.topic_comment_prompt(title, items, _guideline_docs(proj, tid, title, per_doc=3000, total=6000)),
+                       TOPIC_COMMENT_SCHEMA, model=MODEL_MAIN, max_tokens=3000, effort="medium")
+        return {"key": key, "de": res.get("comment_de", "").strip(), "en": res.get("comment_en", "").strip()}
+
+    if not todo:
+        return
+    log(f"Gemeinsame Kommentare für kurz gewürdigte Publikationen ({len(todo)} Thema/Themen)…")
+    for tid, res in _parallel(todo, work, log, "Gemeinsamer Kommentar").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Gemeinsamer Kommentar {proj['topics'][tid]['title']}", res)
+        elif res["de"]:
+            proj["topics"][tid]["topic_comment"] = res
+
+
+def _first_paragraph(text: str) -> str:
+    for line in text.split("\n"):
+        line = re.sub(r"^\**\s*(Studie|Study|Publikation \d|Übersicht der Publikationen)\s*:?\**\s*", "", line.strip())
+        if line:
+            return line
+    return ""
+
+
+def find_transitions(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> None:
+    """Gelegentliche Überleitungen zwischen den Publikationen eines Themas (höchstens eine je drei Publikationen,
+    nie vor der ersten, nicht vor Kurznachrichten). Ein Sonnet-Aufruf je Thema; Cache in
+    proj["topics"][tid]["transitions"] = {"key", "items": {pub_id: {"de", "en"}}}."""
+    todo = []
+    for tid in dict.fromkeys(t for _, t in ready):
+        ids = [p for p, t in ready if t == tid if proj["tiers"].get(p) != "Kurznachricht"
+               and proj["pubs"][p].get("short_en")]
+        t = proj["topics"][tid]
+        if len(ids) < 3:
+            t.pop("transitions", None)
+            continue
+        key = [(p, _text_sig(proj["pubs"][p].get("styled_de") or proj["pubs"][p].get("short_de"))) for p in ids]
+        if (t.get("transitions") or {}).get("key") != key:
+            todo.append((tid, (tid, ids, key)))
+
+    def work(item):
+        tid, ids, key = item
+        title = proj["topics"][tid]["title"]
+        items = [(p, proj["records"].get(p, {}).get("title", p),
+                  _first_paragraph(proj["pubs"][p].get("short_de") or proj["pubs"][p]["short_en"])) for p in ids]
+        res = llm.json(P.transitions_prompt(title, items, max(1, len(ids) // 3)), TRANSITIONS_SCHEMA,
+                       model=MODEL_FAST, max_tokens=2000, effort="medium")
+        out = {}
+        for r in res.get("transitions", []):
+            pid = str(r.get("pub_id", ""))
+            if pid in ids[1:] and r.get("de", "").strip() and len(out) < max(1, len(ids) // 3):
+                out[pid] = {"de": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r["de"]).strip(),
+                            "en": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r.get("en", "")).strip()}
+        return {"key": key, "items": out}
+
+    if not todo:
+        return
+    log(f"Überleitungen zwischen den Publikationen ({len(todo)} Thema/Themen)…")
+    for tid, res in _parallel(todo, work, log, "Überleitungen").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Überleitungen {proj['topics'][tid]['title']}", res)
+        else:
+            proj["topics"][tid]["transitions"] = res
+
+
+def prepend_transition(lines: list[str], sentence: str) -> list[str]:
+    """Setzt den Überleitungssatz vor die Hinleitung (erste Zeile ohne Label); beginnt die Würdigung mit einem
+    Label, wird er eigener erster Absatz."""
+    if not sentence or not lines:
+        return lines
+    first = lines[0].replace("**", "").strip()
+    if any(first.lower().startswith(l.lower()) for l in _TEXT_LABELS):
+        return [sentence] + lines
+    return [sentence + " " + lines[0].strip()] + lines[1:]
+
+
+_TEXT_LABELS = ("Studie:", "Ergebnisse:", "Schlussfolgerung der Autoren:", "Kommentar:", "Fazit für die Praxis:",
+                "Study:", "Results:", "Authors' Conclusion:", "Comment:", "Conclusion for Practice:",
+                "Übersicht der Publikationen", "Overview of the Publications", "Publikation 1", "Publication 1",
+                "Gemeinsame Würdigung", "Joint Appraisal")
 
 
 def insert_own_ref(text: str, sentence: str) -> str:

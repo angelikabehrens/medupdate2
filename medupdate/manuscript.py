@@ -12,7 +12,26 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 
-from .docx_tools import add_field, add_floating_picture, render_line_with_bold_label, style_document
+from .docx_tools import (KURZ_HEADINGS, KURZ_MARK, _SKILL_BOLD_LABELS, add_field, add_floating_picture,
+                         render_line_with_bold_label, style_document)
+
+_COMMENT_LABELS = ("kommentar:", "comment:")
+
+
+def tame_exclamations(line: str, in_comment: bool, left: int) -> tuple[str, int]:
+    """Ausrufezeichen nur im Kommentar und höchstens eines je Hauptabschnitt (Entscheidung der Autorin
+    2026-10-15); alle anderen werden Punkte. Gibt (Zeile, verbleibende Ausrufezeichen) zurück."""
+    if "!" not in line:
+        return line, left
+    if not in_comment or left <= 0:
+        return line.replace("!", "."), left
+    first = line.index("!")
+    return line[: first + 1] + line[first + 1:].replace("!", "."), left - 1
+
+
+def _label_of(line: str) -> str | None:
+    clean = line.replace("**", "").strip("* ").strip().lower()
+    return next((l.lower() for l in _SKILL_BOLD_LABELS if clean.startswith(l.lower())), None)
 
 
 def short_citation(rec: dict, lit_numbers: list[int]) -> str:
@@ -27,7 +46,11 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     """blocks: [{"topic": str, "number": str (optional, z.B. "8.1.2"), "section": (Nummer, Titel) oder None
                  (nur beim ersten Thema eines neuen Hauptabschnitts), "subsection": ebenso für die
                  Ebene darunter, "level": 2 oder 3 (Gliederungsebene des Themas), "sota": {"text", "literature"} | None,
-                 "pubs": [{"title", "rec", "lines", "abstract", "literature", "figure"}]}]
+                 "comment": gemeinsamer Kommentar zu den kurz gewürdigten Publikationen des Themas | None,
+                 "pubs": [{"title", "rec", "lines", "abstract", "literature", "figure", "kurz": bool}]}]
+    Kurznachrichten ("kurz") stehen am Ende des Themas unter der unterstrichenen Überschrift „Kurznachrichten“;
+    ihre Titelzeile trägt die Marke KURZ_MARK und entfällt nach der Literatur-Zusammenführung.
+    Ausrufezeichen: nur im Kommentar, höchstens eines je Hauptabschnitt.
     Mit Nummern entsteht auf Seite 1 ein Inhaltsverzeichnis (Hauptabschnitte und Themen).
     lang: "Deutsch" oder "Englisch" (für Labels)."""
     lit_label = "References" if lang == "Englisch" else "Literatur"
@@ -65,8 +88,10 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     doc.add_page_break()
 
     img_n = tab_n = 0
+    bangs = 1
     for b in blocks:
         if b.get("section"):
+            bangs = 1  # neuer Hauptabschnitt: wieder ein Ausrufezeichen erlaubt
             sp = doc.add_paragraph()
             sp.add_run(f"Abschnitt: „{b['section'][0]}\t{b['section'][1]}“").bold = True
         if b.get("subsection"):
@@ -93,8 +118,19 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
                     doc.add_paragraph(f"{i}. {e}")
             doc.add_paragraph("")
 
-        for pub in b["pubs"]:
-            doc.add_heading(pub["title"], level=2).alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        pubs = sorted(b["pubs"], key=lambda x: bool(x.get("kurz")))  # Kurznachrichten zuletzt
+        kurz_started = False
+        for pub in pubs:
+            if pub.get("kurz") and not kurz_started:
+                kurz_started = True
+                if b.get("comment"):
+                    _render_comment(doc, b["comment"], bangs, lang)
+                    bangs = tame_exclamations(b["comment"], True, bangs)[1]
+                doc.add_paragraph("")
+                kp = doc.add_paragraph()
+                kp.add_run(KURZ_HEADINGS["Englisch" if lang == "Englisch" else "Deutsch"]).underline = True
+            title = (KURZ_MARK if pub.get("kurz") else "") + pub["title"]
+            doc.add_heading(title, level=2).alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             if pub.get("recs"):  # gemeinsame Würdigung: alle Publikationen in der Zitierzeile
                 doc.add_paragraph("; ".join(short_citation(r, [i]) for i, r in enumerate(pub["recs"], start=1)))
             else:
@@ -102,9 +138,14 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
             if pub.get("abstract"):
                 doc.add_paragraph(pub["abstract"])
             in_box = False
+            in_comment = False
             for line in pub["lines"]:
                 line = re.sub(r"^#+\s*", "", line.strip())
                 if line and not re.fullmatch(r"[-*_—―]{3,}", line):
+                    label = _label_of(line)
+                    if label:
+                        in_comment = label in _COMMENT_LABELS
+                    line, bangs = tame_exclamations(line, in_comment, bangs)
                     in_box = render_line_with_bold_label(doc, line, in_box)
             if pub.get("literature"):
                 doc.add_paragraph("")
@@ -130,6 +171,9 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
                 except Exception:
                     pass
             doc.add_paragraph("")
+        if b.get("comment") and not kurz_started:  # keine Kurznachrichten: Kommentar am Ende des Themas
+            _render_comment(doc, b["comment"], bangs, lang)
+            bangs = tame_exclamations(b["comment"], True, bangs)[1]
 
     footer = doc.sections[0].footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -140,6 +184,16 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _render_comment(doc: Document, text: str, bangs: int, lang: str) -> None:
+    """Gemeinsamer Kommentar eines Themas als grauer Kasten mit fettem Label (wie der Kommentar einer
+    einzelnen Würdigung). Ohne Literaturziffern, damit die Zusammenführung ihn nicht umnummeriert."""
+    text = re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", text).strip()
+    text, _ = tame_exclamations(text, True, bangs)
+    label = "Comment: " if lang == "Englisch" else "Kommentar: "
+    render_line_with_bold_label(doc, label + text, False)
+    doc.add_paragraph("")
 
 
 def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, rankings: dict) -> bytes:

@@ -86,7 +86,18 @@ def kurznachricht(llm: LLM, full_text: str, sprache_kw: str, abstract_text: str 
 
     def _clean(t: str) -> str:
         t = re.sub(r"\*\*|^#+\s*", "", t, flags=re.MULTILINE)
-        t = _CITE_RE.sub("", t)
+        # Nur der Verweis "(1)" auf die Publikation selbst bleibt (einmal, hinter der Benennung der Studie);
+        # er wird bei der Zusammenführung zur globalen Nummer – nötig, weil Kurznachrichten im Manuskript
+        # ohne Titelzeile stehen (Block „Kurznachrichten“, 2026-10-15)
+        seen = []
+
+        def _keep_main(m):
+            if m.group(1).strip() == "1" and not seen:
+                seen.append(1)
+                return "(1)"
+            return ""
+
+        t = _CITE_RE.sub(_keep_main, t)
         t = " ".join(t.split())
         return re.sub(r"\s+([.,;:])", r"\1", t)
 
@@ -140,11 +151,12 @@ def _compact_note(compact: dict | None, tier: str) -> str:
 
 
 def shorten(llm: LLM, full_text: str, tier: str, sprache_kw: str, abstract_text: str = "",
-            max_ext: int | None = None, compact: dict | None = None) -> str:
-    """Kürzung nach dem Skill "studien-wuerdigung" (Längenstufen siehe prompts.SKILL_LAENGEN_STUFEN)."""
+            max_ext: int | None = None, compact: dict | None = None, intro: str = "") -> str:
+    """Kürzung nach dem Skill "studien-wuerdigung" (Längenstufen siehe prompts.SKILL_LAENGEN_STUFEN).
+    intro: Einleitung des Volltexts als Grundlage für die Hinleitung (Vorbild Decker, 2026-10-15)."""
     if tier == "Kurznachricht":
         return kurznachricht(llm, full_text, sprache_kw, abstract_text)
-    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw) + _ext_limit_note(max_ext)
+    text = llm.text(M.skill_shorten_prompt(full_text, tier, sprache_kw, intro) + _ext_limit_note(max_ext)
                     + _compact_note(compact, tier),
                     model=MODEL_MAIN, max_tokens=8000,
                     effort="medium")

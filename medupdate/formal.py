@@ -11,7 +11,82 @@ from docx import Document
 
 from .citations import _CITE_RE, consolidate_literature_globally, dedupe_global_references, merge_repeated_citations
 from .config import MODEL_FAST
-from .docx_tools import copy_document_content_into_template
+from .docx_tools import KURZ_MARK, copy_document_content_into_template
+
+
+def collapse_kurznachrichten(doc: Document) -> int:
+    """Kurznachrichten stehen als Block ohne eigene Titel- und Zitierzeile (Vorbild Decker, 2026-10-15).
+    Nach der Literatur-Zusammenführung (die die Titelzeile als Hauptquelle braucht) entfallen beide Zeilen;
+    die globale Nummer der Publikation steht im Text (das "(1)" der Kurznachricht wurde umnummeriert) –
+    fehlt sie, wird sie an das Ende des ersten Satzes gesetzt. Gibt die Zahl der Kurznachrichten zurück."""
+    paragraphs = list(doc.paragraphs)
+    n = 0
+    for i, p in enumerate(paragraphs):
+        if p.style.name != "Heading 2" or not p.text.startswith(KURZ_MARK):
+            continue
+        n += 1
+        remove = [p]
+        num = None
+        if i + 1 < len(paragraphs):
+            cit = paragraphs[i + 1]
+            m = re.search(r"\((\d+)(?:,\s*\d+)*\)\s*$", cit.text.strip())
+            num = m.group(1) if m else None
+            remove.append(cit)
+        body = next((q for q in paragraphs[i + 2:i + 6] if q.text.strip()), None)
+        if body is not None and num and not re.search(rf"[(\[](?:\d+\s*,\s*)*{num}(?:\s*,\s*\d+)*[)\]]", body.text):
+            text = body.text
+            m = re.search(r"[.!?](?=\s+[A-ZÄÖÜ„])", text[20:])
+            text = (text[: 20 + m.start()] + f" ({num})" + text[20 + m.start():]) if m else \
+                re.sub(r"\s*([.!?]?)\s*$", rf" ({num})\1", text, count=1)
+            for r in body.runs[1:]:
+                r.text = ""
+            if body.runs:
+                body.runs[0].text = text
+            else:
+                body.add_run(text)
+        for q in remove:
+            q._element.getparent().remove(q._element)
+    return n
+
+
+def bold_key_references(doc: Document, bold_refs: list[str]) -> list[int]:
+    """Schlüsselstudien (ausführlich gewürdigte Publikationen) im Literaturverzeichnis fett (Vorbild Decker,
+    2026-10-15). Vergleich über den Eintragstext VOR der Formatierung nach dem Zitierstil; gibt die Nummern
+    zurück, damit die Einträge nach der Formatierung fett gesetzt werden können."""
+    wanted = {" ".join(r.split()) for r in bold_refs if r and r.strip()}
+    if not wanted:
+        return []
+    paras = list(doc.paragraphs)
+    lit = next((i for i, p in enumerate(paras) if p.style.name == "Heading 1"
+                and p.text.strip().lower() in ("literatur", "references")), None)
+    if lit is None:
+        return []
+    nums = []
+    for p in paras[lit + 1:]:
+        m = re.match(r"^(\d+)\.\s+(.*)$", p.text.strip())
+        if m and " ".join(m.group(2).split()) in wanted:
+            nums.append(int(m.group(1)))
+    return nums
+
+
+def _apply_bold_refs(doc: Document, nums: list[int]) -> None:
+    if not nums:
+        return
+    paras = list(doc.paragraphs)
+    lit = next((i for i, p in enumerate(paras) if p.style.name == "Heading 1"
+                and p.text.strip().lower() in ("literatur", "references")), None)
+    if lit is None:
+        return
+    english = paras[lit].text.strip().lower() == "references"
+    for p in paras[lit + 1:]:
+        m = re.match(r"^(\d+)\.\s+", p.text.strip())
+        if m and int(m.group(1)) in nums:
+            for r in p.runs:
+                r.bold = True
+    note = doc.add_paragraph()
+    note.add_run("In bold: key studies of this chapter." if english
+                 else "Fett gedruckt: Schlüsselstudien dieses Kapitels.").italic = True
+    paras[lit]._element.addnext(note._element)
 
 
 def run_formal_check_ai(full_text: str, llm) -> list[dict]:
@@ -190,7 +265,7 @@ def fix_spelling_and_grammar(doc: Document, llm) -> int:
 
 
 def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None, rules: dict | None = None,
-                     format_references=None) -> tuple[list[dict], bytes]:
+                     format_references=None, bold_refs: list[str] | None = None) -> tuple[list[dict], bytes]:
     """Führt die formale Prüfung des hochgeladenen (vom Nutzer überarbeiteten)
     Gesamtmanuskripts durch. Führt dabei zunächst alle publikationslokalen
     Literaturlisten zu einer gemeinsamen, fortlaufend nummerierten Liste am
@@ -209,6 +284,8 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     consolidate_literature_globally(doc)
     dedupe_global_references(doc)
     merge_repeated_citations(doc)
+    collapse_kurznachrichten(doc)
+    bold_nums = bold_key_references(doc, bold_refs or [])
     if format_references:
         # Neu in medupdate 2: Literaturverzeichnis nach dem Zitierstil der Hinweise für Autoren
         _paras = list(doc.paragraphs)
@@ -228,6 +305,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
                     p.runs[0].text = f"{num}. {new_text}"
                 else:
                     p.add_run(f"{num}. {new_text}")
+    _apply_bold_refs(doc, bold_nums)
     n_format_fixed = 0 if template_bytes else fix_formatting(doc)
     n_spelling_fixed = fix_spelling_and_grammar(doc, llm)
 

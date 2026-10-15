@@ -93,8 +93,21 @@ class FakeLLM:
                 return {"groups": [{"pub_ids": ids[:2], "question_de": "Zwei Techniken im Vergleich",
                                     "question_en": "Two techniques compared"}]}
             return {"groups": []}
+        if "comment_de" in props:
+            assert "vier Bausteinen" in p and "KEINE Literaturziffern" in p
+            return {"comment_de": "Gemeinsam zeigen beide Studien ein konsistentes Bild. Für die klinische Praxis "
+                                  "bedeutet dies keine Änderung! Wir erwarten weitere Daten!",
+                    "comment_en": "Together both studies are consistent. For clinical practice this means no change! "
+                                  "We expect further data!"}
+        if "transitions" in props:
+            ids = re.findall(r"- id (\S+) \|", p)
+            assert "nie vor der ersten" in p
+            return {"transitions": [{"pub_id": ids[1], "de": "Vor demselben Hintergrund folgt eine zweite Arbeit.",
+                                     "en": "Against the same background a second study follows."}]} if len(ids) > 1 \
+                else {"transitions": []}
         if "refs" in props:
             pid = re.search(r"- id (\S+)", p).group(1)
+            assert "Höchstens EIN Rückbezug je Thema" in p
             return {"refs": [{"pub_id": pid, "manuscript": "alt.docx",
                               "sentence_de": "Im Jahr 2025 hatten wir dazu eine Vorstudie vorgestellt.",
                               "sentence_en": "In 2025 we presented a pilot study on this."}]}
@@ -268,6 +281,54 @@ def test_full_pipeline(monkeypatch=None):
     again = pipeline.import_project(blob)
     assert again["outputs"]["manuskript_DE"] == out["manuskript_DE"]
     (Path(tempfile.gettempdir()) / "medupdate_test_DE.docx").write_bytes(out["manuskript_DE"])
+
+
+def test_kurznachrichten_block():
+    """Kurznachrichten stehen als Block ohne Titel-/Zitierzeile, die globale Nummer im Text; Schlüsselstudien
+    fett im Literaturverzeichnis; Ausrufezeichen nur im Kommentar, höchstens eines je Hauptabschnitt;
+    Überleitung vor der Hinleitung; gemeinsamer Kommentar vor den Kurznachrichten (2026-10-15)."""
+    from medupdate import formal, manuscript
+    from medupdate.appraisal import kurznachricht
+
+    class KurzLLM:
+        def text(self, prompt, **kw):
+            return "Die polnische Studie PILOT (1) prüfte X bei 100 Patienten (2). Sie fand nichts (3)."
+
+    kn = kurznachricht(KurzLLM(), "x", "Deutsch")
+    assert kn == "Die polnische Studie PILOT (1) prüfte X bei 100 Patienten. Sie fand nichts.", kn
+    rec = lambda n: {"authors": [f"Autor{n} A"], "journal": "J", "year": "2026"}
+    lit = lambda n: [f"Autor{n} A. Titel {n}. J. 2026;1:{n}."]
+    pubs = [{"title": "Kurz Eins", "rec": rec(1), "lines": ["Studie PILOT (1) prüfte X. Nichts gefunden!"],
+             "literature": lit(1), "kurz": True, "figure": None},
+            {"title": "Lang Eins", "rec": rec(2), "lines": ["Hinleitung zur Frage.", "Studie: RCT mit 10 Patienten.",
+                                                            "Kommentar: Praxisverändernd! Wirklich!",
+                                                            "Fazit für die Praxis: Gute Studie! Nichts ändert sich."],
+             "literature": lit(2), "kurz": False, "figure": None},
+            {"title": "Kurz Zwei", "rec": rec(3), "lines": ["Studie ohne Nummer prüfte Y. Ergebnis positiv."],
+             "literature": lit(3), "kurz": True, "figure": None}]
+    pubs[1]["lines"] = pipeline.prepend_transition(pubs[1]["lines"], "Von A kommen wir zu B.")
+    assert pubs[1]["lines"][0] == "Von A kommen wir zu B. Hinleitung zur Frage."
+    blocks = [{"topic": "T", "number": "8.1.1", "section": ("8.1", "Abschnitt"), "sota": None, "pubs": pubs,
+               "comment": "Gemeinsam gesehen (2) ändert sich nichts! Wir erwarten mehr!"}]
+    raw = manuscript.build_docx("Titel", blocks, "Deutsch")
+    texts = [p.text for p in Document(io.BytesIO(raw)).paragraphs]
+    assert texts.index("Lang Eins") < texts.index("Kurznachrichten") < texts.index("Kurznachricht · Kurz Eins")
+    assert "Kommentar: Praxisverändernd! Wirklich." in texts, "ein Ausrufezeichen je Hauptabschnitt, nur im Kommentar"
+    assert "Fazit für die Praxis: Gute Studie. Nichts ändert sich." in texts
+    assert "Kommentar: Gemeinsam gesehen ändert sich nichts. Wir erwarten mehr." in texts, "Themen-Kommentar ohne Ziffern"
+    assert texts.index("Kommentar: Gemeinsam gesehen ändert sich nichts. Wir erwarten mehr.") < texts.index("Kurznachrichten")
+    _, final = formal.run_formal_check(raw, None, _template(), {}, None, bold_refs=lit(2))
+    doc = Document(io.BytesIO(final))
+    texts = [p.text for p in doc.paragraphs]
+    assert not any(t.startswith("Kurznachricht · ") for t in texts), "Titelzeilen der Kurznachrichten entfallen"
+    assert not any(t.startswith("Autor1 A et al.") or t.startswith("Autor3 A et al.") for t in texts)
+    assert "Studie PILOT (2) prüfte X. Nichts gefunden." in texts, texts
+    assert "Studie ohne Nummer prüfte Y (3). Ergebnis positiv." in texts, texts
+    bib = [p for p in doc.paragraphs if p.style.name == "Biblio"]
+    assert [b.text[:2] for b in bib] == ["1.", "2.", "3."]
+    assert all(r.bold for r in bib[0].runs) and not any(r.bold for r in bib[1].runs), "Schlüsselstudie fett"
+    assert "Fett gedruckt: Schlüsselstudien dieses Kapitels." in texts
+    assert pipeline.own_refs_limit(1) == 2 and pipeline.own_refs_limit(7) == 7 and pipeline.own_refs_limit(30) == 12
 
 
 def test_llm_retry_and_cost():
@@ -654,6 +715,7 @@ if __name__ == "__main__":
     test_direct_upload()
     test_enforce_pub_limit()
     test_reassign_topics()
+    test_kurznachrichten_block()
     test_llm_retry_and_cost()
     test_results_saved_before_abort()
     test_search_broadening()

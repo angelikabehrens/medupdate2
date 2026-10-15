@@ -533,8 +533,11 @@ def kurznachricht_prompt(full_text: str, sprache_kw: str, abstract_text: str = "
 folgenden kritischen Würdigung eine KURZNACHRICHT auf {ziel_sprache} Sprache.
 
 AUFBAU – ausschließlich Fließtext in EINEM Absatz, höchstens 3 Sätze:
-- Satz 1: Studienziel und Studiendesign in einem Satz. Die Anzahl der eingeschlossenen Patienten \
-(bzw. Teilnehmer) muss darin genannt werden.
+- Satz 1: Studienziel und Studiendesign in einem Satz, mit konkreter Benennung der Studie (Akronym, \
+Land, Design: "Die polnische Beobachtungsstudie PILOT (1) befasste sich mit …", "Eine chinesische \
+randomisierte Studie (1) prüfte …") und der Zahl der eingeschlossenen Patienten (bzw. Teilnehmer). \
+Der Verweis "(1)" steht genau einmal, direkt hinter der Benennung der Studie; er ist die einzige \
+erlaubte Literaturziffer.
 - Danach (Satz 2, höchstens Satz 3): AUSSCHLIESSLICH die Hauptaussage der Studie. Nichts sonst – keine \
 Nebenbefunde, keine Methodendetails, keine Einordnung in andere Literatur, keine Empfehlungen.
 
@@ -547,7 +550,7 @@ relevante Verzerrung, explorative Analyse), dann formuliere die Hauptaussage so,
 
 REGELN:
 - Nur Fließtext: keine Überschrift, keine Labels wie "Ziel:" oder "Fazit:", keine Aufzählung, keine \
-Klammerverweise oder Literaturziffern, keine Erläuterung des Vorgehens.
+weiteren Klammerverweise oder Literaturziffern außer dem "(1)" in Satz 1, keine Erläuterung des Vorgehens.
 - Höchstens 3 Sätze. Jeder Satz bündig, also ohne verschachtelte Nebensatzketten, und trotz des dichten \
 Inhalts gut verständlich. Ganze Sätze, kein Telegrammstil.
 - Zahlen, Effektgrößen, Konfidenzintervalle und p-Werte nur unverändert aus dem Text übernehmen; nichts \
@@ -579,8 +582,51 @@ und Ergebnis: Eingeschränkt valide Ergebnisse führen zu "noch nicht" oder "unt
 nicht zu "ja"."""
 
 
-def skill_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
+STIL_VORBILD = """SPRACHSTIL NACH DEM VORBILD DER AUTORIN (Angelika, 2026-10-15; Vorbild: Kapitel „Onkologie: Unterer \
+GI-Trakt“, Gastro Update 2026):
+- HINLEITUNG: Die Besprechung beginnt mit 1–2 Sätzen klinischem Kontext, die zur Frage der Studie \
+führen und sagen, warum sie jetzt zählt (etabliertes Vorgehen, Lücke, Kontroverse, neues Verfahren). \
+Erst danach die Studie. Die Hinleitung steht als eigener erster Absatz ohne Label vor dem \
+Abstract-Block bzw. als erste Sätze des Fließtexts. Grundlage: die Einleitung der Publikation unten \
+(falls mitgegeben) und die Einordnung in der Würdigung; nichts erfinden. Sie kommt zum Zielumfang \
+hinzu (höchstens ca. 40 Wörter).
+- KONKRETE BENENNUNG: Die Studie wird mit dem bestimmten Artikel und möglichst konkret eingeführt: \
+Akronym, Land, Phase, Design ("die spanische multizentrische COLONPREV-Studie", "diese \
+chinesische Phase-II-Studie", "die skandinavische ALASCCA-Studie"), nicht "in einer Studie".
+- JEDER SATZ KNÜPFT AN DEN VORIGEN AN: durch Konnektoren und Rückverweise ("Hierfür", "Hierbei", \
+"Zudem", "Jedoch", "Dennoch", "Zugleich", "somit", "wenngleich", "Interessant fiel … aus", \
+"Beachtenswert ist"). Gleichgerichtetes wird gebündelt ("sowohl … als auch", "nicht nur …, sondern \
+auch") statt in Einzelsätzen aufgezählt. Kurze Sätze bleiben die Regel (20–25 Wörter), bis 30 Wörter \
+sind erlaubt, wenn der Satz einen einzigen Gedanken trägt; keine Schachtelsätze.
+- ABWECHSLUNG DER VERBEN: nicht nur "untersuchte", sondern "befasste sich mit", "widmete sich", \
+"ging der Frage nach", "lieferte Daten zu", "poolte die Evidenz aus", "untermauerte mit Evidenz"; \
+Schlussfolgerungen: "schlussfolgern", "konkludieren", "sehen hierin", "Zusammenfassend zeigte sich".
+- ZAHLEN HINTER DIE AUSSAGE: erst die Aussage in Worten, dann die Zahl in Klammern ("fiel \
+signifikant höher aus (87,8 % vs. 77,2 %; P < 0,001)"); relative und absolute Änderung zusammen \
+("um etwa die Hälfte, von 14,1 auf 7,7 %"); ungewohnte Einheiten einmal in Alltagsgrößen \
+übersetzen ("eine Stunde zügiges Gehen entspricht etwa 4 MET-Stunden"); Number needed to treat, \
+wenn vorhanden.
+- KALIBRIERTE BEWERTUNG: Die Stärke der Formulierung folgt der Evidenz. Eine randomisierte \
+Phase-III-Studie mit hartem Endpunkt darf klar heißen "ist der neue Standard", "praxisverändernd", \
+"hierfür liegt nun höchste Evidenz vor". Phase II, einarmig, Register, Surrogatendpunkt oder kleine \
+Fallzahl werden mit "wenngleich …" relativiert, immer mit dem konkreten Grund. Kein gleichförmiges \
+Absichern bei starker Evidenz, kein Überhöhen bei schwacher.
+- KOMMENTAR IN VIER BAUSTEINEN (wo ein Kommentar vorgesehen ist): 1. Zusammenschau ("In \
+Zusammenschau …", bei mehreren Studien ihr Verhältnis zueinander); 2. Einordnung in Leitlinie oder \
+bisherigen Standard; 3. Praxisfolge ("Für die klinische Praxis bedeutet dies, …") mit Zulassungs- \
+oder Off-label-Status, wenn Publikation oder Leitlinie ihn nennen; 4. offene Frage oder Ausblick. \
+Nicht länger als vorgesehen; bei mehreren Punkten "Erstens …, zweitens …". Im Ausblick ist die \
+Wir-Form erlaubt ("Wir dürfen gespannt sein, …"), sonst nirgends in der Würdigung.
+- AUSRUFEZEICHEN: nur im Kommentar und nur bei einem praxisverändernden Ergebnis mit höchster \
+Evidenz, höchstens eines. Sonst keine.
+- IDIOMATIK MIT MASS: höchstens eine bildhafte Wendung je Besprechung, nur gängige deutsche Idiome \
+("Stellschraube", "Rückgrat der Therapie"), keine übersetzten englischen Redewendungen."""
+
+
+def skill_shorten_prompt(full_text: str, tier: str, sprache_kw: str, intro: str = "") -> str:
     target_words = SKILL_LAENGEN_STUFEN[tier]
+    intro_block = (f"\n\nEinleitung der Publikation (nur als Grundlage für die Hinleitung; keine Zahlen \
+daraus übernehmen, die nicht auch in der Würdigung stehen):\n{intro.strip()[:3000]}" if intro.strip() else "")
     ziel_sprache = "englischer" if sprache_kw == "Englisch" else "deutscher"
     fazit_label = "Fazit für die Praxis" if sprache_kw != "Englisch" else "Conclusion for Practice"
     kommentar_label = "Kommentar" if sprache_kw != "Englisch" else "Comment"
@@ -614,7 +660,8 @@ KEIN persönlicher Kommentar: keine Ich-Aussagen, keine subjektiven Erfahrungsbe
 "Schlussfolgerung der Autoren:").
 2. Würdigung (ca. 52%): Fließtext ohne Zwischenüberschriften, 3-4 Absätze: Neuheit (~8%), Validität \
 (~24%), Einordnung mit bisheriger Evidenz/Leitlinien (~10%), Bedeutung für die Praxis (~10%).
-3. "{kommentar_label}:" (ca. 12%): persönliche, klinisch begründete Einschätzung, eigener Absatz, \
+3. "{kommentar_label}:" (ca. 12%): klinisch begründete Einschätzung in den vier Bausteinen \
+(Zusammenschau, Leitlinie/Standard, Praxisfolge, Ausblick; siehe SPRACHSTIL unten), eigener Absatz, \
 beginnt mit fettem "{kommentar_label}:".
 4. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit fettem "{fazit_label}:", kurz und prägnant \
 nach der Regel FAZIT FÜR DIE PRAXIS KURZ UND PRÄGNANT unten."""
@@ -700,6 +747,7 @@ nur weil dieser Abschnitt gekürzt wird. Ein knapper Halbsatz mit Verweis reicht
 
 Stil: ganze, gut verständliche Sätze mit so wenig Wörtern wie möglich. Kein Telegrammstil, keine \
 Aufzählungen im Fließtext.
+{STIL_VORBILD}{intro_block}
 
 SATZBAU UND STATISTIK – gut lesbar statt überladen:
 - Kurze, klare Sätze: möglichst höchstens 20–25 Wörter, eine Hauptaussage pro Satz. Keine \
@@ -1033,6 +1081,7 @@ Stil: kurze, klare Sätze (möglichst höchstens 20–25 Wörter), eine Hauptaus
 Schachtelsätze. Sparsam mit Statistik: Hauptergebnisse mit Effektgröße und 95%-Konfidenzintervall, \
 Nebenergebnisse in Worten, höchstens zwei Zahlenangaben pro Satz. Wesentliche Inhalte bleiben erhalten. \
 Kein Telegrammstil, keine Aufzählungen im Fließtext.
+{STIL_VORBILD}
 
 {_FAZIT_JOINT}
 
