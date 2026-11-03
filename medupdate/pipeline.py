@@ -635,16 +635,123 @@ def enforce_pub_limit(proj: dict, log) -> list[dict]:
     return dropped
 
 
-def check_assignment(llm: LLM, proj: dict, uploads: dict[str, bytes], log) -> None:
+def check_assignment(llm: LLM, proj: dict, uploads: dict[str, bytes], log,
+                     forced_topics: dict[str, str] | None = None) -> None:
     """Pflichtschritt vor dem Schreiben: Uploads zuordnen, Themenzuordnung prüfen, hochgeladene Arbeiten
-    bewerten, Publikationszahl und Seitenumfang einhalten. Erst danach wird „Manuskript erstellen“ frei."""
+    bewerten, Publikationszahl und Seitenumfang einhalten. Erst danach wird „Manuskript erstellen“ frei.
+    forced_topics: {Dateiname: topic_id} für zusätzliche Publikationen, deren Unterkapitel die Autoren in der
+    Auswahlliste festgelegt haben."""
     proj["check_ok"] = False
     if uploads:
         match_uploads(llm, proj, uploads, log)
+    for name, tid in (forced_topics or {}).items():
+        pm = (proj["uploads"].get(name) or {}).get("pmid")
+        if pm and proj["pubs"].get(pm, {}).get("extra") and tid in proj["topics"]:
+            proj["pubs"][pm]["topic_id"] = tid
+            proj["pubs"][pm]["move_reason"] = "Von den Autoren festgelegt."
+            proj.setdefault("topic_manual", {})[pm] = tid
     reassign_topics(llm, proj, log)
     rate_unranked(llm, proj, log)
     enforce_pub_limit(proj, log)
     proj["check_ok"] = True
+
+
+def apply_selection_package(proj: dict, data: bytes) -> dict:
+    """Übernimmt das ZIP-Paket der Auswahlliste (selection_sheet): Auswahl, Reihenfolge und Unterkapitel der
+    Autoren gelten als manuell festgelegt; PDFs werden bei ihrer Publikation abgelegt (mit Prüfung), Leitlinien
+    dem gewählten Unterkapitel zugeordnet. Zusätzliche Publikationen gibt die Funktion zurück; sie laufen über
+    check_assignment (Identifikation). Rückgabe: {"uploads", "forced_topics", "report"}."""
+    from .files import extract_text
+    from .selection_sheet import read_package
+    meta, files = read_package(data)
+    # Frühere Kürzungen wegen der Vorgaben nicht wiederherstellen: es zählt die Auswahl der Autoren
+    proj["limit_dropped"] = []
+    for d in proj["pubs"].values():
+        d.pop("limit_dropped", None)
+    report = {"selected": 0, "moved": 0, "pdfs": 0, "pdf_warn": [], "extra": 0, "guidelines": 0, "ignored": [],
+              "other_project": bool(meta.get("project_id") and meta.get("project_id") != proj.get("id")),
+              "edited_by": meta.get("edited_by", "")}
+    home = {}
+    for tid, t in proj["topics"].items():
+        for p in list(t.get("recommended", [])) + list(t.get("reserve", [])):
+            home.setdefault(p, tid)
+    cur = current_topics(proj)
+    rankings = {}
+    for t in proj["topics"].values():
+        for p, it in (t.get("ranking") or {}).items():
+            rankings.setdefault(p, it)
+    pkg_topics = [t for t in meta.get("topics", []) if t.get("id") in proj["topics"]]
+    report["ignored"] += [t.get("id", "") for t in meta.get("topics", []) if t.get("id") not in proj["topics"]]
+    # Auswahl neu aufbauen: nur die Unterkapitel aus dem Paket, alles Angehakte in der Reihenfolge der Autoren
+    for t in pkg_topics:
+        proj["topics"][t["id"]]["selected"] = []
+    uploads, forced = {}, {}
+    manual = proj.setdefault("topic_manual", {})
+    for t in pkg_topics:
+        tid, topic = t["id"], proj["topics"][t["id"]]
+        order = []
+        for it in t.get("items", []):
+            fname = it.get("file_name") or ""
+            blob = files.get(it.get("file") or "")
+            if it.get("kind") == "extra":
+                if not (it.get("checked") and blob):
+                    continue
+                name = fname or it["file"].rsplit("/", 1)[-1]
+                uploads[name], forced[name] = blob, tid
+                order.append(f"file:{name}")
+                report["extra"] += 1
+                continue
+            p = it.get("id", "")
+            if p not in proj["records"] and p not in proj["pubs"]:
+                report["ignored"].append(p)
+                continue
+            order.append(p)
+            d = proj["pubs"].setdefault(p, {})
+            if not it.get("checked"):
+                if d.get("extra"):
+                    d["deselected"] = True
+                manual.pop(p, None)
+                continue
+            report["selected"] += 1
+            d.pop("deselected", None)
+            src = cur.get(p) or home.get(p)
+            if d.get("extra"):
+                d["topic_id"] = tid
+            else:
+                for other in proj["topics"].values():  # jede Arbeit nur in einem Unterkapitel
+                    if other is not topic and p in other.get("selected", []):
+                        other["selected"].remove(p)
+                topic["selected"].append(p)
+                if p not in topic.setdefault("ranking", {}) and p in rankings:
+                    topic["ranking"][p] = rankings[p]
+            if src and src != tid:
+                d.setdefault("home_topic", src)
+                d["move_reason"] = "Von den Autoren festgelegt."
+                report["moved"] += 1
+            manual[p] = tid
+            if blob:
+                name = fname or it["file"].rsplit("/", 1)[-1]
+                res = attach_direct_upload(proj, p, name, blob)
+                if not res["ok"]:
+                    attach_direct_upload(proj, p, name, blob, force=True)
+                    d["upload_checked"] = ("von den Autoren bestätigt" if it.get("check") == "bestätigt"
+                                           else "passt evtl. nicht, bitte prüfen")
+                    if it.get("check") != "bestätigt":
+                        report["pdf_warn"].append(proj["records"].get(p, {}).get("title", p))
+                report["pdfs"] += 1
+        topic["order"] = order
+    for g in meta.get("guidelines", []):
+        blob = files.get(g.get("file") or "")
+        if not blob:
+            continue
+        name = g.get("file_name") or g["file"].rsplit("/", 1)[-1]
+        tid = g.get("topic_id") if g.get("topic_id") in proj["topics"] else ""
+        proj["guideline_uploads"][name] = {"topic_id": tid, "text": extract_text(name, blob)}
+        report["guidelines"] += 1
+    proj["reassigned_for"] = None
+    proj["check_ok"] = False
+    bump_selection(proj)
+    return {"uploads": uploads, "forced_topics": forced, "report": report}
 
 
 def set_manual_topic(proj: dict, p: str, tid: str) -> None:
@@ -724,9 +831,13 @@ def _pub_list(proj: dict) -> list[tuple[str, str]]:
         # Eine Publikation steht nur einmal im Manuskript (z.B. nach Verschieben in ein anderes Thema)
         ids = [p for p in t.get("selected", t.get("recommended", [])) if p not in seen]
         ids += [p for p, d in proj["pubs"].items() if d.get("extra") and d.get("topic_id") == tid and p not in ids
-                and not d.get("limit_dropped")]
+                and not d.get("limit_dropped") and not d.get("deselected")]
         rk = t.get("ranking", {})
         ids.sort(key=lambda p: -rk.get(p, {}).get("score", 0))
+        if t.get("order"):  # von den Autoren festgelegte Reihenfolge (Auswahlliste); Unbekanntes ans Ende
+            by_file = {f"file:{n}": u.get("pmid") for n, u in (proj.get("uploads") or {}).items() if u.get("pmid")}
+            pos = {by_file.get(k, k): i for i, k in enumerate(t["order"])}
+            ids.sort(key=lambda p: pos.get(p, len(pos)))
         seen.update(ids)
         out.extend((p, tid) for p in ids)
     return out

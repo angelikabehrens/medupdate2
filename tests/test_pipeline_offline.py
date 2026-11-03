@@ -533,6 +533,83 @@ def test_transition_slots():
     assert pipeline.transition_slots(proj2, [("x", "K"), ("y", "K")], "K") == (["x"], ["x"])
 
 
+def test_selection_package(monkeypatch_pubmed=True):
+    """Auswahlliste für Autoren: HTML erzeugen, Paket der Autoren übernehmen (Auswahl, Reihenfolge, Verschieben
+    in ein anderes Unterkapitel, PDF bei der Literaturstelle, zusätzliche Publikation, Leitlinie)."""
+    import zipfile
+    import fitz
+    from medupdate import selection_sheet as S
+
+    def pdf(text):
+        doc = fitz.open()
+        doc.new_page().insert_text((50, 72), text, fontsize=9)
+        return doc.tobytes()
+    rk = lambda q: {"quality": q, "length_score": q, "score": q, "priority": "A"}
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "Gastro"}
+    proj["rules"] = {"max_publications": 3}
+    proj["records"] = {"1": {"title": "Endoscopic submucosal dissection versus EMR for Barrett neoplasia",
+                             "authors": ["Meier A"], "doi": "10.1000/xyz123"},
+                       "2": {"title": "Second study", "authors": ["Kim S"]},
+                       "3": {"title": "Third study", "authors": ["Rex D"]},
+                       "4": {"title": "Reserve study", "authors": ["Ng K"]}}
+    proj["topics"] = {"T1": {"id": "T1", "title": "Barrett", "recommended": ["1", "2"], "reserve": [],
+                             "ranking": {"1": rk(90), "2": rk(70)}},
+                      "T2": {"id": "T2", "title": "Polypen", "recommended": ["3"], "reserve": ["4"],
+                             "ranking": {"3": rk(80), "4": rk(40)}}}
+    html = S.build_sheet(proj).decode("utf-8")
+    data = json.loads(re.search(r'<script type="application/json" id="data">(.*?)</script>', html, re.S).group(1)
+                      .replace("<\\/", "</"))
+    assert data["target"] == 3 and [t["id"] for t in data["topics"]] == ["T1", "T2"]
+    assert [(i["id"], i["checked"]) for i in data["topics"][1]["items"]] == [("3", True), ("4", False)]
+    assert S.build_sheet_zip(proj)[:2] == b"PK"
+    meta = {"format": S.FORMAT, "version": 1, "project_id": proj["id"], "edited_by": "Dr. X",
+            "topics": [{"id": "T1", "items": [
+                {"kind": "pub", "id": "4", "checked": True},
+                {"kind": "pub", "id": "1", "checked": True, "file": "dateien/001_a.pdf", "file_name": "a.pdf",
+                 "check": "passt"},
+                {"kind": "pub", "id": "2", "checked": False}]},
+                {"id": "T2", "items": [{"kind": "pub", "id": "3", "checked": True},
+                                       {"kind": "extra", "checked": True, "file": "dateien/002_x.pdf",
+                                        "file_name": "x.pdf"}]}],
+            "guidelines": [{"file": "leitlinien/003_g.pdf", "file_name": "g.pdf", "topic_id": "T2"}]}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("auswahl.json", json.dumps(meta))
+        z.writestr("dateien/001_a.pdf", pdf("doi 10.1000/xyz123 Endoscopic submucosal dissection Meier"))
+        z.writestr("dateien/002_x.pdf", pdf("An additional study on eosinophilic esophagitis"))
+        z.writestr("leitlinien/003_g.pdf", pdf("S3 Leitlinie Kolorektales Karzinom"))
+    res = pipeline.apply_selection_package(proj, buf.getvalue())
+    r = res["report"]
+    assert (r["selected"], r["moved"], r["pdfs"], r["extra"], r["guidelines"]) == (3, 1, 1, 1, 1), r
+    assert pipeline._pub_list(proj) == [("4", "T1"), ("1", "T1"), ("3", "T2")], "Reihenfolge der Autoren"
+    assert proj["pubs"]["1"]["upload_checked"] == "passt" and proj["guideline_uploads"]["g.pdf"]["topic_id"] == "T2"
+    assert proj["topics"]["T1"]["ranking"]["4"] == rk(40), "Bewertung wandert mit"
+    assert res["forced_topics"] == {"x.pdf": "T2"}
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema["properties"]
+            if "kind" in props:
+                return {"title": "Eosinophilic esophagitis study", "authors": ["Lee P"], "journal": "Gut",
+                        "year": "2026", "doi": "", "kind": "original"}
+            if "same_question" in props:  # KI möchte 1 verschieben – die Festlegung der Autoren gilt
+                return {"assignments": [{"pub_id": "1", "topic_id": "T2", "reason_de": "x"}], "same_question": []}
+            return {"assignments": [{"key": k, "topic_id": "T1"} for k in re.findall(r"^(\S+): ", prompt, re.M)
+                                    if k.startswith("upload:")]}
+    orig = pipeline.pubmed.find_pmid, pipeline.rate_unranked
+    pipeline.pubmed.find_pmid = lambda **kw: None
+    pipeline.rate_unranked = lambda *a, **k: None
+    try:
+        pipeline.check_assignment(L(), proj, res["uploads"], lambda m: None, forced_topics=res["forced_topics"])
+    finally:
+        pipeline.pubmed.find_pmid, pipeline.rate_unranked = orig
+    cur = pipeline.current_topics(proj)
+    assert cur == {"4": "T1", "1": "T1", "3": "T2", "upload:x.pdf": "T2"}, cur
+    assert pipeline._pub_list(proj)[-1] == ("upload:x.pdf", "T2"), "zusätzliche Publikation an ihrer Stelle"
+    assert proj["check_ok"]
+
+
 def test_sota_choice():
     from medupdate.appraisal import sota_topics
     topics = {t: {"section_number": "8.1"} for t in ("A", "B", "C")} | {"D": {"section_number": "8.2"}}
@@ -739,6 +816,7 @@ if __name__ == "__main__":
     test_manual_window()
     test_sota_choice()
     test_transition_slots()
+    test_selection_package()
     test_sota_trailing_note()
     test_full_pipeline()
     test_comment_box()

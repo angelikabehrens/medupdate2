@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from medupdate import appraisal as A, pipeline
+from medupdate import appraisal as A, pipeline, selection_sheet
 from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
@@ -400,6 +400,14 @@ if proj.get("toc"):
     if any("recommended" in t for t in proj["topics"].values()):
         st.download_button("⬇️ Literaturempfehlung als Word-Datei", data=pipeline.recommendation_docx(proj),
                            file_name=f"Literaturempfehlung_{date.today().isoformat()}.docx", mime=DOCX_MIME)
+        st.markdown("**Auswahlliste für die Autoren** (zum Versenden per Mail): Die Autoren haken Publikationen "
+                    "an, ändern die Reihenfolge, laden PDFs und Leitlinien hoch und speichern alles als ZIP-Paket. "
+                    "Das Paket laden Sie in Schritt 2 hoch.")
+        a1, a2 = st.columns(2)
+        a1.download_button("⬇️ Auswahlliste als ZIP (für Mail empfohlen)", data=selection_sheet.build_sheet_zip(proj),
+                           file_name=selection_sheet.sheet_filename(proj, "zip"), mime="application/zip")
+        a2.download_button("⬇️ Auswahlliste als HTML-Datei", data=selection_sheet.build_sheet(proj),
+                           file_name=selection_sheet.sheet_filename(proj), mime="text/html")
 
     if proj["errors"]:
         with st.expander(f"⚠️ {len(proj['errors'])} Hinweis(e) aus der Verarbeitung"):
@@ -458,6 +466,39 @@ if any("recommended" in t for t in proj["topics"].values()):
         for tid, g in missing_gl:
             st.markdown(f"- {g.get('title', '')} ({g.get('society', '')}, {g.get('year', '')}) — Thema: "
                         f"{proj['topics'][tid]['title']}")
+
+    # 2·0. Bearbeitete Auswahlliste der Autoren übernehmen
+    with st.form("step2_package"):
+        pkg_file = st.file_uploader("Bearbeitete Auswahlliste der Autoren (ZIP-Paket aus „Auswahl speichern“)",
+                                    type=["zip"])
+        st.caption("Übernimmt Auswahl, Reihenfolge, Unterkapitel, PDFs und Leitlinien der Autoren und prüft danach "
+                   "die Themenzuordnung. Die Festlegungen der Autoren ändert die KI nicht. Kosten ca. 0,2–1 USD.")
+        go_pkg = st.form_submit_button("📥 Auswahl der Autoren übernehmen und prüfen", type="primary")
+    if go_pkg and pkg_file is not None:
+        llm = get_llm(CHECK_BUDGET_USD)
+        if llm:
+            try:
+                res = pipeline.apply_selection_package(proj, pkg_file.getvalue())
+            except ValueError as ex:
+                st.error(str(ex))
+                res = None
+            if res:
+                r = res["report"]
+                if r["other_project"]:
+                    st.warning("Das Paket wurde aus einer Auswahlliste eines anderen Projekts erstellt. Übernommen "
+                               "wurden nur Publikationen, die in diesem Projekt vorkommen.")
+                st.session_state["pkg_report"] = r
+                run_with_status("Auswahl der Autoren wird übernommen",
+                                lambda log: pipeline.check_assignment(llm, proj, res["uploads"], log,
+                                                                      forced_topics=res["forced_topics"]), llm)
+    if st.session_state.get("pkg_report"):
+        r = st.session_state["pkg_report"]
+        st.success(f"Auswahl der Autoren{' (' + r['edited_by'] + ')' if r['edited_by'] else ''} übernommen: "
+                   f"{r['selected']} Publikationen angehakt, davon {r['moved']} in ein anderes Unterkapitel "
+                   f"verschoben, {r['pdfs']} PDFs, {r['extra']} zusätzliche Publikationen, {r['guidelines']} "
+                   "Leitlinien.")
+        if r["pdf_warn"]:
+            st.warning("Diese PDFs passen evtl. nicht zur Publikation, bitte prüfen: " + "; ".join(r["pdf_warn"][:10]))
 
     # 2a. Hochladen und Themenzuordnung prüfen – immer vor dem Schreiben
     with st.form("step2_upload"):
