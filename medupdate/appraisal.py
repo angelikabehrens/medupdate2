@@ -25,7 +25,8 @@ from .llm import LLM
 WEB_SEARCHES = 4
 
 # Längenstufen nach dem Skill "studien-wuerdigung" (Seitenäquivalent für die Umfangsplanung)
-TIER_PAGES = {"Kurznachricht": 0.2, "½ Seite (Kurz)": 0.5, "¾ Seite": 0.75, "1 Seite": 1.0, "1 Seite (Lang)": 1.0,
+TIER_PAGES = {"Kurznachricht": 0.2, "⅓ Seite (Kurz)": 0.33, "½ Seite (Kurz)": 0.5, "½ Seite (Mittel)": 0.5,
+              "¾ Seite": 0.75, "1 Seite": 1.0, "1 Seite (Lang)": 1.0,
               "1,5 Seiten (Lang)": 1.5,
               "2 Seiten": 2.0}
 TIER_ORDER = ["Kurznachricht", "½ Seite (Kurz)", "1 Seite", "1,5 Seiten (Lang)", "2 Seiten"]
@@ -129,7 +130,7 @@ def _ext_limit_note(max_ext: int | None) -> str:
 
 # Kompakte Statistik bzw. kompakter Kommentar (Häkchen in Schritt 2, Angelika 2026-10-14): Satzzahl nach
 # Längenstufe, damit beide Teile zum Umfang der Würdigung passen
-_COMPACT_SENTENCES = {"½ Seite (Kurz)": (1, 1), "¾ Seite": (2, 2), "1 Seite": (2, 2), "1 Seite (Lang)": (2, 2), "1,5 Seiten (Lang)": (2, 3), "2 Seiten": (3, 3)}
+_COMPACT_SENTENCES = {"⅓ Seite (Kurz)": (1, 1), "½ Seite (Kurz)": (1, 1), "½ Seite (Mittel)": (1, 1), "¾ Seite": (2, 2), "1 Seite": (2, 2), "1 Seite (Lang)": (2, 2), "1,5 Seiten (Lang)": (2, 3), "2 Seiten": (3, 3)}
 
 
 def _compact_note(compact: dict | None, tier: str) -> str:
@@ -343,13 +344,16 @@ def estimate_pages(tiers: dict[str, str], n_sections: int) -> float:
     return round(sum(TIER_PAGES[t] for t in tiers.values()) + overhead, 1)
 
 
-# Feste Zahl je Längenstufe (Angelika 2026-10-14): 3 lang (1–1,5 Seiten, Kommentar + Fazit), 8 mittel
-# (¾ Seite, Fazit), 20 kurz (½ Seite), 19 Kurznachrichten. Gibt es mehr Spitzenstudien (Längenwert ≥ 80),
+# Feste Zahl je Längenstufe (Angelika 2026-10-14): 3 lang, 8 mittel, 20 kurz, 19 Kurznachrichten.
+# Umfang je Stufe neu festgelegt (Angelika 2026-11-03): lang höchstens 1 Seite (Kommentar + Fazit), mittel
+# ½ Seite (Fazit), kurz ⅓ Seite (nur Fließtext), Kurznachricht 0,2 Seite. Gibt es mehr Spitzenstudien (Längenwert ≥ 80),
 # werden auch diese lang gewürdigt; dafür entfallen am unteren Ende die schwächsten Studien.
 DEFAULT_TIER_COUNTS = {"long": 3, "mid": 8, "short": 20, "news": 19}
 TOP_SCORE = 80   # "sehr hohe Qualität und Bedeutung"
-TOP_15_SCORE = 90  # lange Würdigung mit 1,5 statt 1 Seite
+TOP_15_SCORE = 90  # nicht mehr verwendet: lange Würdigungen haben seit 2026-11-03 höchstens 1 Seite
 COUNT_TOLERANCE_PAGES = 3  # so viel darf die geplante Verteilung überschritten werden (Angelika 2026-10-14)
+COUNT_TIER = {"long": "1 Seite (Lang)", "mid": "½ Seite (Mittel)", "short": "⅓ Seite (Kurz)", "news": "Kurznachricht"}
+SHORTEST_TIER = COUNT_TIER["short"]  # Notlösung für selbst ausgewählte Arbeiten jenseits der Verteilung
 
 
 def count_tiers(pubs: list[dict], counts: dict) -> tuple[dict[str, str], list[str]]:
@@ -372,22 +376,20 @@ def count_tiers(pubs: list[dict], counts: dict) -> tuple[dict[str, str], list[st
             rest.append(p["id"])
             continue
         if k == "long":
-            tiers[p["id"]] = ("1,5 Seiten (Lang)" if i == 0 or p.get("length_score", 0) >= TOP_15_SCORE
-                              else "1 Seite (Lang)")
+            tiers[p["id"]] = COUNT_TIER["long"]
         else:
-            tiers[p["id"]] = {"mid": "¾ Seite", "short": "½ Seite (Kurz)", "news": "Kurznachricht"}[k]
+            tiers[p["id"]] = COUNT_TIER[k]
         i += 1
     return tiers, rest
 
 
 def _nominal_pages(counts: dict, n_sections: int) -> float:
-    """Seitenbedarf der geplanten Verteilung (3 lang, davon eine mit 1,5 Seiten, usw.)."""
+    """Seitenbedarf der geplanten Verteilung (Stufen siehe COUNT_TIER)."""
     c = {k: max(0, int(counts.get(k) or 0)) for k in ("long", "mid", "short", "news")}
     fake = {}
-    for k, tier in (("long", "1 Seite (Lang)"), ("mid", "¾ Seite"), ("short", "½ Seite (Kurz)"),
-                    ("news", "Kurznachricht")):
+    for k, tier in COUNT_TIER.items():
         for j in range(c[k]):
-            fake[f"{k}{j}"] = "1,5 Seiten (Lang)" if k == "long" and j == 0 else tier
+            fake[f"{k}{j}"] = tier
     return estimate_pages(fake, n_sections)
 
 

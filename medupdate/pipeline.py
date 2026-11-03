@@ -39,8 +39,9 @@ from .references import make_formatter
 # Version der Kürzungsvorgabe; 2 = kürzere Sätze, weniger Statistik (2026-10-10); 3 = Methodik verständlich
 # erklärt, abwechslungsreiches Fazit (2026-10-11); 9 = kurzes Fazit: Qualität ohne Begründung + Praxisaussage (2026-10-14);
 # 10 = Sprachstil nach dem Vorbild Decker: Hinleitung aus der Einleitung, Konnektoren, Kommentar in vier Bausteinen,
-# Kurznachricht mit "(1)" hinter der Studie (2026-10-15)
-SHORT_VERSION = 10
+# Kurznachricht mit "(1)" hinter der Studie (2026-10-15); 11 = neue Längen: lang höchstens 1 Seite (370 statt 420
+# Wörter), mittel ½ Seite, kurz ⅓ Seite (2026-11-03)
+SHORT_VERSION = 11
 MAX_GROUP_SIZE = 5  # gemeinsame Würdigung von bis zu 5 Publikationen (Angelika 2026-10-13)
 GROUP_VERSION = 3  # höher setzen, wenn sich die Regeln für gemeinsame Würdigungen ändern
 
@@ -845,10 +846,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         tiers, overflow = A.plan_tiers(_length_info(proj, ready), proj.get("rules") or {},
                                        _n_sections(proj, {t for _, t in ready}))
         for p in overflow:
-            tiers[p] = "½ Seite (Kurz)"
+            tiers[p] = A.SHORTEST_TIER
         proj["tiers"] = tiers
     for p, _ in ready:
-        proj["tiers"].setdefault(p, "½ Seite (Kurz)")
+        proj["tiers"].setdefault(p, A.SHORTEST_TIER)
 
     # 4. Kürzung (englisch). Auf Wunsch werden ältere Kürzungen (vor SHORT_VERSION) neu erstellt; dann
     # auch Übersetzung und Stilfassung, die darauf aufbauen.
@@ -861,6 +862,8 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         # geplante Länge geändert (z.B. neue Verteilung lang/mittel/kurz): neu kürzen
         retier = d.get("short_en") and ((d.get("short_tier") or prev_tiers.get(p)) or proj["tiers"].get(p)) \
             != proj["tiers"].get(p)
+        # „1 Seite (Lang)“ behält den Namen, ist aber seit 2026-11-03 kürzer: ältere Fassungen neu kürzen
+        retier = retier or (d.get("short_en") and proj["tiers"].get(p) == "1 Seite (Lang)" and d.get("short_v", 1) < 11)
         if old or changed or retier:
             for k in ("short_en", "short_de", "styled_de", "style_ok"):
                 d.pop(k, None)
@@ -1466,6 +1469,7 @@ def _text_sig(text: str | None) -> str:
 TOPIC_COMMENT_SCHEMA = obj({"comment_de": STR, "comment_en": STR})
 TRANSITIONS_SCHEMA = obj({"transitions": arr(obj({"pub_id": STR, "de": STR, "en": STR}))})
 LONG_TIERS = ("1 Seite (Lang)", "1,5 Seiten (Lang)", "2 Seiten")
+SHORT_TIERS = ("½ Seite (Kurz)", "⅓ Seite (Kurz)")
 
 
 def topic_comments(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> None:
@@ -1475,7 +1479,7 @@ def topic_comments(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> N
     todo = []
     for tid in dict.fromkeys(t for _, t in ready):
         ids = [p for p, t in ready if t == tid]
-        short = [p for p in ids if proj["tiers"].get(p) == "½ Seite (Kurz)" and proj["pubs"][p].get("short_en")]
+        short = [p for p in ids if proj["tiers"].get(p) in SHORT_TIERS and proj["pubs"][p].get("short_en")]
         has_long = any(proj["tiers"].get(p) in LONG_TIERS for p in ids)
         t = proj["topics"][tid]
         if not (2 <= len(short) <= 4) or has_long or t.get("varia"):

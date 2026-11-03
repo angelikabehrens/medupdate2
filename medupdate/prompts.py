@@ -492,10 +492,12 @@ LAENGEN_STUFEN = {
 SKILL_LAENGEN_STUFEN = {
     "Ausführlich": None,
     "Kurznachricht": 75,
+    "⅓ Seite (Kurz)": 115,
     "½ Seite (Kurz)": 160,
+    "½ Seite (Mittel)": 180,
     "¾ Seite": 270,
     "1 Seite": 370,
-    "1 Seite (Lang)": 420,
+    "1 Seite (Lang)": 370,  # höchstens 1 Seite inkl. Kommentar und Fazit (Angelika 2026-11-03)
     "1,5 Seiten (Lang)": 570,
     "2 Seiten": 700,
 }
@@ -505,6 +507,10 @@ SKILL_LAENGEN_BESCHREIBUNGEN = {
                      "Studienziel, Studiendesign und Zahl der eingeschlossenen Patienten; danach "
                      "ausschließlich die Hauptaussage der Studie (wird gegen Fazit, Primärendpunkt und "
                      "Validitätsurteil geprüft). Keine Literaturverweise.",
+    "⅓ Seite (Kurz)": "≈115 Wörter (höchstens 140) · NUR Fließtext, ein Absatz. Kein Abstract-Block, kein "
+                      "Kommentar, kein Fazit-Absatz. Der letzte Satz ist die Kernaussage der Publikation.",
+    "½ Seite (Mittel)": "≈180 Wörter (höchstens 210) · knapper Abstract-Block, kurze Würdigung als Fließtext, "
+                        "eigener Absatz „Fazit für die Praxis“. Kein Kommentar.",
     "½ Seite (Kurz)": "≈160 Wörter (bis 220 erlaubt) · NUR Fließtext, ein bis zwei Absätze. Kein "
                       "Abstract-Block, kein Kommentar, kein Fazit-Absatz. Der letzte Satz ist "
                       "die Kernaussage der Publikation.",
@@ -631,7 +637,7 @@ daraus übernehmen, die nicht auch in der Würdigung stehen):\n{intro.strip()[:3
     fazit_label = "Fazit für die Praxis" if sprache_kw != "Englisch" else "Conclusion for Practice"
     kommentar_label = "Kommentar" if sprache_kw != "Englisch" else "Comment"
 
-    if tier == "½ Seite (Kurz)":
+    if tier in ("½ Seite (Kurz)", "⅓ Seite (Kurz)"):
         aufbau = f"""Aufbau: NUR Fließtext, ein bis zwei Absätze. KEINE Zwischenüberschriften, KEIN \
 Abstract-Block, KEIN Kommentar, KEIN eigener Fazit-Absatz, KEINE Labels wie "Kernaussage:".
 
@@ -643,7 +649,7 @@ Ergebnis in Worten: ca. 30%
 - Neuheit/Einordnung in einem Halbsatz: ca. 5-10%
 - Letzter Satz (ohne Label): die Kernaussage der Publikation – die Hauptbotschaft der Autoren MIT \
 deren Hedging, nicht die Meinung des Rezensenten: ca. 10-15%"""
-    elif tier in ("1 Seite", "¾ Seite"):
+    elif tier in ("1 Seite", "¾ Seite", "½ Seite (Mittel)"):
         aufbau = f"""Aufbau in drei Blöcken:
 1. Abstract-Block (ca. 30%): mit FETTEN Labels "Studie:", "Ergebnisse:", "Schlussfolgerung der \
 Autoren:" (deren Wortlaut MIT Hedging, alle Teilaussagen der Schlussfolgerung enthalten).
@@ -800,7 +806,7 @@ abwechseln, nicht durchgehend so.
 sind (z.B. "Für Patienten, die … möchten, bleiben etablierte Optionen …"); solche Passagen streichen, \
 auch wenn sie in der Vorlage stehen.
 
-{FAZIT_KURZ_REGEL if tier != "½ Seite (Kurz)" else "Bei dieser Stufe gibt es keinen eigenen Fazit-Absatz."}
+{FAZIT_KURZ_REGEL if tier not in ("½ Seite (Kurz)", "⅓ Seite (Kurz)") else "Bei dieser Stufe gibt es keinen eigenen Fazit-Absatz."}
 Formuliere das Qualitätsurteil am Anfang des Fazits passend zur Studie und nicht immer gleich \
 (z.B. "Hochwertige randomisierte Studie, klares Ergebnis.", "Große, sorgfältige Registerstudie.", \
 "Methodisch begrenzte Pilotstudie.").
@@ -1024,8 +1030,8 @@ def joint_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
     verknuepfung_label = "Assessment of the Linkage" if en else "Einordnung der Verknüpfung"
     uebersicht_label = "Overview of the Publications" if en else "Übersicht der Publikationen"
     wuerdigung_label = "Critical Appraisal" if en else "Kritische Würdigung"
-    if tier in ("Kurznachricht", "½ Seite (Kurz)"):
-        tier = "½ Seite (Kurz)"
+    if tier in ("Kurznachricht", "½ Seite (Kurz)", "⅓ Seite (Kurz)"):
+        tier = "⅓ Seite (Kurz)" if tier != "½ Seite (Kurz)" else tier
         aufbau = f"""Aufbau: NUR Fließtext, ein bis zwei Absätze. KEINE Zwischenüberschriften, \
 KEINE Labels wie "{uebersicht_label}:".
 
@@ -1035,7 +1041,7 @@ Richtwerte für die Gewichtung:
 NICHT zulässig ist (z.B. keine gemeinsame Effektschätzung): ca. 25%
 - Wichtigste kritische Punkte aus der "{wuerdigung_label}": ca. 35%
 - Letzter Satz (ohne Label): die Kernaussage des "{fazit_label}": ca. 25%"""
-    elif tier in ("1 Seite", "¾ Seite"):
+    elif tier in ("1 Seite", "¾ Seite", "½ Seite (Mittel)"):
         aufbau = f"""Aufbau in drei Blöcken:
 1. "{uebersicht_label}" (ca. 25%): Für jede Publikation ein bis zwei knappe Sätze (Studiendesign, \
 Population, Hauptergebnis), eingeleitet mit "Publication 1:" bzw. "Publikation 1:" usw., mit Nennung der \

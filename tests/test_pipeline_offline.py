@@ -461,15 +461,16 @@ def test_length_budget():
     pubs50 = [{"id": str(i), "length_score": 79 - i * 0.5} for i in range(55)]
     tiers, overflow = plan_tiers(pubs50, {"tier_counts": counts}, 6)
     c = Counter(tiers.values())
-    assert c["1,5 Seiten (Lang)"] == 1 and c["1 Seite (Lang)"] == 2 and c["¾ Seite"] == 8
-    assert c["½ Seite (Kurz)"] == 20 and c["Kurznachricht"] == 19 and len(overflow) == 5
+    # Längen seit 2026-11-03: lang höchstens 1 Seite, mittel ½ Seite, kurz ⅓ Seite, Kurznachricht 0,2 Seite
+    assert c["1 Seite (Lang)"] == 3 and "1,5 Seiten (Lang)" not in c and c["½ Seite (Mittel)"] == 8
+    assert c["⅓ Seite (Kurz)"] == 20 and c["Kurznachricht"] == 19 and len(overflow) == 5
     budget = estimate_pages(tiers, 6)
     top = [{"id": f"t{i}", "length_score": 95 - i} for i in range(8)] + pubs50
     tiers2, overflow2 = plan_tiers(top, {"tier_counts": counts}, 6)
     assert sum(1 for t in tiers2.values() if "Lang" in t) == 8, "alle Spitzenstudien lang"
     assert estimate_pages(tiers2, 6) <= budget + 3 and len(tiers2) < 50, "dafür weniger Publikationen (Toleranz 3 Seiten)"
     tiers3, _ = plan_tiers(pubs50, {"tier_counts": counts, "max_pages": 30}, 6)
-    assert estimate_pages(tiers3, 6) <= 30 and Counter(tiers3.values())["¾ Seite"] == 8
+    assert estimate_pages(tiers3, 6) <= 30 and Counter(tiers3.values())["½ Seite (Mittel)"] == 8
 
 
 def test_outline_levels():

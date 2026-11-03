@@ -295,13 +295,13 @@ if proj.get("toc"):
                "entfallen am unteren Ende die schwächsten Studien. Das Seitenlimit gilt zusätzlich.")
     m1, m2, m3, m4 = st.columns(4)
     _cnt_new = {
-        "long": int(m1.number_input("Lang (1–1,5 Seiten, Kommentar und Fazit)", 0, 100,
+        "long": int(m1.number_input("Lang (höchstens 1 Seite, Kommentar und Fazit)", 0, 100,
                                     int(_cnt.get("long", 3)), step=1, disabled=_running, key="cnt_long")),
-        "mid": int(m2.number_input("Mittel (¾ Seite, Fazit)", 0, 200,
+        "mid": int(m2.number_input("Mittel (½ Seite, Fazit)", 0, 200,
                                    int(_cnt.get("mid", 8)), step=1, disabled=_running, key="cnt_mid")),
-        "short": int(m3.number_input("Kurz (½ Seite)", 0, 300,
+        "short": int(m3.number_input("Kurz (⅓ Seite)", 0, 300,
                                      int(_cnt.get("short", 20)), step=1, disabled=_running, key="cnt_short")),
-        "news": int(m4.number_input("Kurznachricht (≈0,2–0,3 Seite)", 0, 300,
+        "news": int(m4.number_input("Kurznachricht (0,2 Seite)", 0, 300,
                                     int(_cnt.get("news", 19)), step=1, disabled=_running, key="cnt_news")),
     }
     if _cnt_new != _cnt:
@@ -544,11 +544,11 @@ if any("recommended" in t for t in proj["topics"].values()):
         _cmp = proj.get("compact_opts") or {}
         k1, k2 = st.columns(2)
         opt_cstats = k1.checkbox("Statistik kompakt: nur die wesentlichen Punkte", value=bool(_cmp.get("stats")),
-                                 help="½ Seite: 1 Satz, 1 Seite: 2 Sätze, 1,5 Seiten: 2 Sätze, jeweils plus ein Satz "
+                                 help="Kurz und mittel: 1 Satz, lang: 2 Sätze, jeweils plus ein Satz "
                                       "zur statistischen Qualität. Bereits gekürzte Würdigungen werden bei einer "
                                       "Änderung neu gekürzt (ca. 0,3 USD je Publikation).")
         opt_ccomm = k2.checkbox("Kommentar kompakt: nur die wichtigste Einordnung", value=bool(_cmp.get("comment")),
-                                help="½ Seite: 1 Satz, 1 Seite: 2 Sätze, 1,5 Seiten: 3 Sätze. Bereits gekürzte "
+                                help="Lang: 2 Sätze. Bereits gekürzte "
                                      "Würdigungen werden bei einer Änderung neu gekürzt (ca. 0,3 USD je Publikation).")
         b1, b2 = st.columns(2)
         opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
