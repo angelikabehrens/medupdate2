@@ -875,7 +875,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     ext_budget = None
     if max_refs:
         n_main = sum(len(proj["pubs"][p].get("group") or [p]) for p, _ in ready)
-        n_sota = _n_sections(proj, {t for _, t in ready}) * 3
+        n_sota = _n_sections(proj, {t for _, t in ready}) * 3 if SOTA_ENABLED else 0
         ext_budget = max(1, (max_refs - n_main - n_sota) // max(1, len(ready)))
 
     def shorten(p):
@@ -958,7 +958,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             en = A.generate_sota(llm, title, "Englisch", _guideline_docs(proj, tid, title, per_doc=5000, total=12000))
         return {"sota_en": en, "sota_de": A.translate_sota(llm, en)}
 
-    if options.get("sota", True):
+    if SOTA_ENABLED and options.get("sota", True):
         log(f"State of the Art wird erstellt ({len(sota_ids)} Hauptabschnitt(e))…")
         for t, res in _parallel(todo, sota, log, "State of the Art").items():
             if isinstance(res, Exception):
@@ -1046,7 +1046,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         for tid in topic_ids:
             t = proj["topics"][tid]
             sota_block = (t.get("sota_de" if lang == "Deutsch" else "sota_en")
-                          if tid in sota_ids and options.get("sota", True) else None)
+                          if SOTA_ENABLED and tid in sota_ids and options.get("sota", True) else None)
             g = dict(gliederung.get(tid, {}))
             for k in ("section", "subsection"):
                 if g.get(k):
@@ -1468,6 +1468,10 @@ def _text_sig(text: str | None) -> str:
 
 TOPIC_COMMENT_SCHEMA = obj({"comment_de": STR, "comment_en": STR})
 TRANSITIONS_SCHEMA = obj({"transitions": arr(obj({"pub_id": STR, "de": STR, "en": STR}))})
+# State of the Art gestrichen (Entscheidung der Autorin 2026-11-03); an seine Stelle treten die Überleitungen
+# vor der ersten Publikation jedes Themas. Code bleibt für eine mögliche Wiederaufnahme erhalten.
+SOTA_ENABLED = False
+TRANSITIONS_VERSION = 2
 LONG_TIERS = ("1 Seite (Lang)", "1,5 Seiten (Lang)", "2 Seiten")
 SHORT_TIERS = ("½ Seite (Kurz)", "⅓ Seite (Kurz)")
 
@@ -1515,35 +1519,61 @@ def _first_paragraph(text: str) -> str:
     return ""
 
 
+def transition_slots(proj: dict, ready: list[tuple[str, str]], tid: str) -> tuple[list[str], list[str]]:
+    """Publikationen eines Themas in Lesereihenfolge (reguläre zuerst, Kurznachrichten am Ende) und die Pflicht-
+    Stellen für eine Überleitung (Entscheidung der Autorin 2026-11-03): vor der ersten Publikation des Themas,
+    vor jeder gemeinsamen Würdigung und vor jeder Würdigung der Stufe Lang."""
+    ids = [p for p, t in ready if t == tid and proj["pubs"][p].get("short_en")]
+    regular = [p for p in ids if proj["tiers"].get(p) != "Kurznachricht"]
+    kurz = [p for p in ids if proj["tiers"].get(p) == "Kurznachricht"]
+    order = regular + kurz
+    required = [p for p in regular if proj["pubs"][p].get("group") or proj["tiers"].get(p) in LONG_TIERS]
+    if order and order[0] not in required:
+        required.insert(0, order[0])
+    return (regular if regular else order[:1]), required
+
+
 def find_transitions(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> None:
-    """Gelegentliche Überleitungen zwischen den Publikationen eines Themas (höchstens eine je drei Publikationen,
-    nie vor der ersten, nicht vor Kurznachrichten). Ein Sonnet-Aufruf je Thema; Cache in
-    proj["topics"][tid]["transitions"] = {"key", "items": {pub_id: {"de", "en"}}}."""
+    """Überleitungen zwischen den Publikationen eines Themas (Entscheidung der Autorin 2026-11-03): immer vor der
+    ersten Publikation des Themas (ersetzt den State of the Art), vor jeder gemeinsamen Würdigung und vor jeder
+    Würdigung der Stufe Lang; zusätzlich gelegentlich (höchstens eine je drei weitere Publikationen, nur bei Themen
+    mit mindestens drei regulären Publikationen), nie vor Kurznachrichten außer als erste des Themas.
+    Ein Sonnet-Aufruf je Thema; Cache in proj["topics"][tid]["transitions"] = {"key", "items": {pub_id: {"de", "en"}}}."""
     todo = []
-    for tid in dict.fromkeys(t for _, t in ready):
-        ids = [p for p, t in ready if t == tid if proj["tiers"].get(p) != "Kurznachricht"
-               and proj["pubs"][p].get("short_en")]
+    topic_order = list(dict.fromkeys(t for _, t in ready))
+    for i, tid in enumerate(topic_order):
+        ids, required = transition_slots(proj, ready, tid)
         t = proj["topics"][tid]
-        if len(ids) < 3:
+        if not ids:
             t.pop("transitions", None)
             continue
-        key = [(p, _text_sig(proj["pubs"][p].get("styled_de") or proj["pubs"][p].get("short_de"))) for p in ids]
+        n_opt = (len(ids) - len(required)) // 3 if len(ids) >= 3 else 0
+        prev = proj["topics"][topic_order[i - 1]]["title"] if i else ""
+        key = [TRANSITIONS_VERSION, prev, required, n_opt] + \
+              [(p, _text_sig(proj["pubs"][p].get("styled_de") or proj["pubs"][p].get("short_de"))) for p in ids]
         if (t.get("transitions") or {}).get("key") != key:
-            todo.append((tid, (tid, ids, key)))
+            todo.append((tid, (tid, ids, required, n_opt, prev, key)))
 
     def work(item):
-        tid, ids, key = item
+        tid, ids, required, n_opt, prev, key = item
         title = proj["topics"][tid]["title"]
         items = [(p, proj["records"].get(p, {}).get("title", p),
-                  _first_paragraph(proj["pubs"][p].get("short_de") or proj["pubs"][p]["short_en"])) for p in ids]
-        res = llm.json(P.transitions_prompt(title, items, max(1, len(ids) // 3)), TRANSITIONS_SCHEMA,
-                       model=MODEL_FAST, max_tokens=2000, effort="medium")
-        out = {}
+                  _first_paragraph(proj["pubs"][p].get("short_de") or proj["pubs"][p]["short_en"]),
+                  "gemeinsam" if proj["pubs"][p].get("group") else
+                  ("lang" if proj["tiers"].get(p) in LONG_TIERS else "")) for p in ids]
+        res = llm.json(P.transitions_prompt(title, items, required, n_opt, prev), TRANSITIONS_SCHEMA,
+                       model=MODEL_FAST, max_tokens=2500, effort="medium")
+        out, n_free = {}, 0
         for r in res.get("transitions", []):
             pid = str(r.get("pub_id", ""))
-            if pid in ids[1:] and r.get("de", "").strip() and len(out) < max(1, len(ids) // 3):
-                out[pid] = {"de": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r["de"]).strip(),
-                            "en": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r.get("en", "")).strip()}
+            if pid not in ids or pid in out or not r.get("de", "").strip():
+                continue
+            if pid not in required:
+                if pid == ids[0] or n_free >= n_opt:
+                    continue
+                n_free += 1
+            out[pid] = {"de": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r["de"]).strip(),
+                        "en": re.sub(r"\s*[(\[]\d+(?:\s*,\s*\d+)*[)\]]", "", r.get("en", "")).strip()}
         return {"key": key, "items": out}
 
     if not todo:

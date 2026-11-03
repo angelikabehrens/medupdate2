@@ -101,10 +101,14 @@ class FakeLLM:
                                   "We expect further data!"}
         if "transitions" in props:
             ids = re.findall(r"- id (\S+) \|", p)
-            assert "nie vor der ersten" in p
-            return {"transitions": [{"pub_id": ids[1], "de": "Vor demselben Hintergrund folgt eine zweite Arbeit.",
-                                     "en": "Against the same background a second study follows."}]} if len(ids) > 1 \
-                else {"transitions": []}
+            req = re.findall(r"- id (\S+) \|[^\n]*\| PFLICHT", p)
+            assert "PFLICHT" in p and ids[0] in req, "Pflicht-Überleitung vor der ersten Publikation"
+            out = [{"pub_id": i, "de": f"Wir kommen zur Arbeit {i}.", "en": f"We turn to study {i}."} for i in req]
+            free = [i for i in ids[1:] if i not in req]
+            if free:
+                out.append({"pub_id": free[0], "de": "Vor demselben Hintergrund folgt eine weitere Arbeit.",
+                            "en": "Against the same background another study follows."})
+            return {"transitions": out}
         if "refs" in props:
             pid = re.search(r"- id (\S+)", p).group(1)
             assert "Höchstens EIN Rückbezug je Thema" in p
@@ -247,16 +251,11 @@ def test_full_pipeline(monkeypatch=None):
     for m in proj["pubs"][gid]["group"]:
         assert any(proj["records"][m]["doi"] in b for b in biblio), "beide Publikationen im Literaturverzeichnis"
     raw = [p.text for p in Document(io.BytesIO(out["rohfassung_DE"])).paragraphs]
-    assert proj["topics"]["T2"]["sota_en"]["source"] == "intro_v3", "State of the Art aus den Einleitungen"
-    assert proj["topics"]["T4"]["sota_en"]["source"] == "web", "ohne Volltext: wie bisher per Websuche"
-    assert raw.count("State of the Art") == 2, "genau ein State of the Art je Hauptabschnitt mit Publikationen"
-    i_sota, i_t2 = raw.index("State of the Art"), raw.index("Thema: „8.1.2\tThema Zwei“")
-    assert i_sota == i_t2 + 2, "State of the Art vor dem Thema mit den meisten Publikationen"
-    paras = doc.paragraphs
-    k = next(i for i, p in enumerate(paras) if p.text == "State of the Art")
-    run = paras[k].runs[0]
-    assert run.underline and not run.bold, "State of the Art unterstrichen, nicht fett"
-    assert paras[k - 1].text == "" and paras[k + 1].text.strip(), "Leerzeile vor, nicht nach der Überschrift"
+    assert "State of the Art" not in raw, "State of the Art gestrichen (2026-11-03)"
+    assert not any(t.get("sota_en") for t in proj["topics"].values())
+    assert sum(bool((t.get("transitions") or {}).get("items")) for t in proj["topics"].values()) >= 3, \
+        "jedes Thema mit Publikationen erhält eine Überleitung vor der ersten Publikation"
+    assert any("Wir kommen zur Arbeit" in x for x in raw), "Pflicht-Überleitung steht im Manuskript"
     toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
     print("GLIEDERUNG", toc)
     expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),
@@ -522,6 +521,18 @@ def test_sota_trailing_note():
     assert entries == {1: "Pimentel-Nunes P. ESGE. Endoscopy. 2022.", 2: "Ishihara R. Guidelines. Dig Endosc. 2020."}, entries
 
 
+def test_transition_slots():
+    proj = {"pubs": {p: {"short_en": "x"} for p in "abcdef"}, "tiers": {}}
+    proj["pubs"]["c"]["group"] = ["c1", "c2"]
+    proj["tiers"] = {"a": "⅓ Seite (Kurz)", "b": "1 Seite (Lang)", "c": "½ Seite (Mittel)", "d": "⅓ Seite (Kurz)",
+                     "e": "Kurznachricht", "f": "⅓ Seite (Kurz)"}
+    ready = [(p, "T") for p in "aebcdf"]
+    ids, req = pipeline.transition_slots(proj, ready, "T")
+    assert ids == ["a", "b", "c", "d", "f"] and req == ["a", "b", "c"]
+    proj2 = {"pubs": {"x": {"short_en": "x"}, "y": {"short_en": "y"}}, "tiers": {"x": "Kurznachricht", "y": "Kurznachricht"}}
+    assert pipeline.transition_slots(proj2, [("x", "K"), ("y", "K")], "K") == (["x"], ["x"])
+
+
 def test_sota_choice():
     from medupdate.appraisal import sota_topics
     topics = {t: {"section_number": "8.1"} for t in ("A", "B", "C")} | {"D": {"section_number": "8.2"}}
@@ -727,6 +738,7 @@ if __name__ == "__main__":
     test_manual_limits()
     test_manual_window()
     test_sota_choice()
+    test_transition_slots()
     test_sota_trailing_note()
     test_full_pipeline()
     test_comment_box()

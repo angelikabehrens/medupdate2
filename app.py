@@ -4,7 +4,7 @@ Zwei Schritte für die Nutzerin bzw. den Nutzer:
 1. Inhaltsverzeichnis, Formatvorlage und Hinweise für Autoren hochladen → KI-gestützte
    Literaturempfehlung und Leitlinienrecherche.
 2. Volltexte, eigene frühere Manuskripte und ggf. fehlende Leitlinien hochladen → die KI erstellt
-   kritische Würdigungen, Kürzungen, State of the Art, Übersetzung, Stilanpassung,
+   kritische Würdigungen, Kürzungen, Überleitungen, Übersetzung, Stilanpassung,
    Literaturverzeichnis, Formatierung und formale Prüfung.
 """
 
@@ -534,7 +534,10 @@ if any("recommended" in t for t in proj["topics"].values()):
                 "hochzuladen sind). Danach wird „Manuskript erstellen“ freigegeben.")
     with st.form("step2_write"):
         o2, o3 = st.columns(2)
-        opt_sota = o2.checkbox("State of the Art (einer je Hauptabschnitt)", value=True)
+        opt_trans = o2.checkbox("Überleitungen zwischen den Studien", value=True,
+                                help="Immer vor der ersten Publikation jedes Themas, vor jeder gemeinsamen Würdigung "
+                                     "und vor jeder langen Würdigung; sonst gelegentlich (höchstens eine je drei "
+                                     "Publikationen). Ersetzt den State of the Art.")
         opt_style = o3.checkbox("An meinen Schreibstil anpassen", value=True)
         opt_joint = st.checkbox("Gemeinsame Würdigung für Publikationen mit gleicher Fragestellung (2–5 je Gruppe)",
                                 value=True, help="Wie Schritt 4B in MyLuo. Die Einzelwürdigungen werden zu einer "
@@ -574,7 +577,7 @@ if any("recommended" in t for t in proj["topics"].values()):
         llm = get_llm(float(opt_budget))
         if llm:
             run_with_status("Manuskript wird erstellt", lambda log: pipeline.run_manuscript(llm, proj, log, {
-                "sota": opt_sota, "style": opt_style, "trial": opt_trial,
+                "sota": False, "transitions": opt_trans, "style": opt_style, "trial": opt_trial,
                 "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
                 "reshorten": opt_reshorten, "compact_stats": opt_cstats, "compact_comment": opt_ccomm}), llm)
 

@@ -648,20 +648,37 @@ Gib ein JSON-Objekt: "comment_de" (deutsch) und "comment_en" (dieselbe Aussage a
 {its}{gl}"""
 
 
-def transitions_prompt(topic: str, items: list[tuple[str, str, str]], max_n: int) -> str:
-    """Gelegentliche Überleitungen zwischen den Publikationen eines Themas (Vorbild Decker: „Von der Chemotherapie
-    kommen wir zur Chirurgie“). items: [(id, Titel, erster Absatz der Würdigung)] in Manuskript-Reihenfolge."""
-    its = "\n\n".join(f"- id {i} | {t}\n  Beginn: {x[:600]}" for i, t, x in items)
+def transitions_prompt(topic: str, items: list[tuple[str, str, str, str]], required: list[str], max_opt: int,
+                       prev_topic: str = "") -> str:
+    """Überleitungen zwischen den Publikationen eines Themas (Vorbild Decker: „Von der Chemotherapie kommen wir zur
+    Chirurgie“; Entscheidung der Autorin 2026-11-03: Pflicht vor der ersten Publikation des Themas, vor jeder
+    gemeinsamen Würdigung und vor jeder langen Würdigung, sonst gelegentlich). items: [(id, Titel, erster Absatz,
+    Art)] in Manuskript-Reihenfolge; required: ids mit Pflicht-Überleitung; max_opt: weitere, freiwillige Stellen."""
+    its = "\n\n".join(f"- id {i} | {t}" + (f" | {art}" if art else "") + (" | PFLICHT" if i in required else "")
+                       + f"\n  Beginn: {x[:600]}" for i, t, x, art in items)
+    first = items[0][0] if items else ""
+    prev = (f"Das vorherige Thema im Manuskript war „{prev_topic}“; die Überleitung vor der ersten Publikation darf "
+            f"daran anknüpfen, wenn es einen echten Bezug gibt, sonst führt sie neu in das Thema ein.") if prev_topic \
+        else "Es ist das erste Thema des Manuskripts; die Überleitung vor der ersten Publikation führt in das Thema ein."
+    opt = (f"Zusätzlich darfst du an höchstens {max_opt} weiteren Stellen (nicht PFLICHT) eine Überleitung setzen, "
+           f"aber nur gelegentlich und nur bei echtem inhaltlichem Bezug zur vorherigen Publikation (gleiche Frage aus "
+           f"anderer Richtung, Wechsel des Verfahrens, Gegenbefund); lieber keine als eine gezwungene.") if max_opt \
+        else "Weitere Überleitungen über die PFLICHT-Stellen hinaus sind nicht erlaubt."
     return f"""Die folgenden Publikationen werden in dieser Reihenfolge im Thema „{topic}“ eines ärztlichen \
-Fortbildungshandbuchs besprochen. Finde höchstens {max_n} Stellen, an denen EIN kurzer Überleitungssatz vor \
-einer Publikation den Lesefluss verbessert, weil es einen echten inhaltlichen Bezug zur vorherigen Publikation \
-gibt (gleiche Frage aus anderer Richtung, Wechsel des Verfahrens, Gegenbefund). Überleitungen nur gelegentlich, \
-nicht bei jeder Publikation und nie vor der ersten. Lieber keine als eine gezwungene; dann leere Liste.
+Fortbildungshandbuchs besprochen. Der Text braucht kurze Überleitungssätze, die den Leser durch das Kapitel führen.
+
+PFLICHT: Vor jeder mit PFLICHT markierten Publikation steht genau EIN Überleitungssatz. Das sind die erste \
+Publikation des Themas (id {first}), jede gemeinsame Würdigung mehrerer Studien und jede ausführliche (lange) \
+Würdigung. {prev} Vor einer gemeinsamen Würdigung kündigt der Satz an, dass mehrere Studien dieselbe Frage \
+untersuchten; vor einer langen Würdigung hebt er hervor, warum diese Arbeit besonders wichtig ist, ohne Ergebnisse \
+vorwegzunehmen. Vor der ersten Publikation knüpft der Satz nicht an eine vorherige Publikation an.
+{opt}
 
 Je Überleitung: "pub_id" (die id der Publikation, VOR der der Satz steht), "de": EIN deutscher Satz mit höchstens \
-20 Wörtern, Wir-Form erlaubt („Von der Systemtherapie kommen wir zur Chirurgie.“, „Vor demselben Hintergrund \
-untersuchte eine zweite Arbeitsgruppe …“), "en": derselbe Satz auf Englisch. Keine Literaturziffern, keine Zahlen, \
-kein Gendern, nichts behaupten, was nicht in den Textanfängen steht.
+25 Wörtern, Wir-Form erlaubt („Von der Systemtherapie kommen wir zur Chirurgie.“, „Vor demselben Hintergrund \
+untersuchten gleich zwei Arbeitsgruppen …“), "en": derselbe Satz auf Englisch. Der Satz wiederholt nicht die \
+Hinleitung, die am Beginn der Würdigung bereits steht, sondern führt zu ihr hin. Keine Literaturziffern, keine \
+Zahlen, kein Gendern, nichts behaupten, was nicht in den Textanfängen steht.
 
 Publikationen:
 {its}"""
