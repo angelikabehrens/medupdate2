@@ -1,4 +1,4 @@
-streamlit>=1.40
+streamlit==1.65.0  # 1.66.x: Datei-Upload-Felder laden in Safari nicht („Importing a module script failed“), 2026-11-03
 anthropic>=1.13
 requests
 python-docx
