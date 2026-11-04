@@ -1,0 +1,16 @@
+#cloud-config
+# MyLuo Pro – zweiter Produktionsserver. Diesen Text bei Hetzner beim Anlegen des Servers in das Feld
+# „Cloud config“ einfügen und dort DIREKT im Feld die drei Platzhalter HIER_... ersetzen.
+# Die Werte niemals per Mail, Chat oder in GitHub weitergeben.
+write_files:
+  - path: /opt/myluo/github.env
+    permissions: "0600"
+    content: |
+      GITHUB_TOKEN=HIER_GITHUB_TOKEN_EINFUEGEN
+  - path: /opt/myluo/secrets.toml
+    permissions: "0600"
+    content: |
+      ANTHROPIC_API_KEY = "HIER_API_SCHLUESSEL_EINFUEGEN"
+      APP_PASSWORD = "HIER_ZUGANGSCODE_EINFUEGEN"
+runcmd:
+  - [bash, -c, 'set -e; apt-get update -q && apt-get install -y -q git; . /opt/myluo/github.env; git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf "x-access-token:%s" "$GITHUB_TOKEN" | base64 -w0)" clone -q https://github.com/angelikabehrens/medupdate2.git /opt/myluo/app; bash /opt/myluo/app/deploy/install.sh > /var/log/myluo-install.log 2>&1']
