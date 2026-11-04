@@ -15,7 +15,8 @@ also mitten in einem Projekt wechseln.
 2. **Personal access tokens** → **Fine-grained tokens** → **Generate new token**
 3. Token name: `MyLuo Server`; Expiration: längste mögliche Laufzeit
 4. Repository access: **Only select repositories** → `medupdate2`
-5. Permissions → Repository permissions → **Contents: Read-only** (alles andere bleibt aus)
+5. Permissions → **Add permissions** → im Suchfeld `Contents` eingeben und anhaken → daneben **Read-only**
+   wählen (Metadata: Read-only kommt automatisch dazu; alles andere bleibt aus)
 6. **Generate token**, den Schlüssel (beginnt mit `github_pat_`) kopieren und kurz in einer Notiz
    auf dem Mac ablegen. Er wird nur einmal angezeigt.
 
