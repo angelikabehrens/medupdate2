@@ -206,10 +206,11 @@ padding:10px 16px;border-radius:8px;display:none;max-width:90vw;z-index:20}
   <div class="intro">
     <strong>So geht es:</strong>
     <ol>
-      <li>Publikationen anhaken, die gewürdigt werden sollen. Oben sehen Sie, wie viele angehakt sind und wie viele vorgesehen sind.</li>
+      <li>Publikationen anhaken, die gewürdigt werden sollen. Oben sehen Sie, wie viele angehakt sind und wie viele seitens med update vorgesehen sind.</li>
       <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ die Pfeile oder „Verschieben nach“ verwenden.</li>
       <li>Das PDF direkt bei der Publikation hochladen. Die Datei wird sofort geprüft (DOI oder Titel und Erstautor).</li>
-      <li>Weitere Publikationen beim passenden Unterkapitel ergänzen, Leitlinien ganz unten.</li>
+      <li>Weitere, in der Liste nicht aufgeführte Publikationen beim passenden Unterkapitel ergänzen, Leitlinien ganz unten.</li>
+      <li>Wenn Sie die Arbeit unterbrechen, speichern Sie Ihre Auswahl der Publikationen mit den von Ihnen hochgeladenen Dateien unter „Auswahl speichern“. Zum Fortsetzen laden Sie die gespeicherte Datei unter „Gespeichertes Paket öffnen“ hoch und arbeiten dort weiter.</li>
       <li>„Auswahl speichern“ erzeugt ein ZIP-Paket. Dieses Paket bitte zurückschicken (bei großen Paketen per Cloud-Link).</li>
     </ol>
     <label>Bearbeitet von: <input type="text" id="editor" placeholder="Name"></label>
@@ -283,7 +284,7 @@ function safeName(s){ return String(s).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0
 function selectedCount(){ let n = 0; for (const tid of state.order) for (const id of state.topics[tid].items) if (state.pubs[id].checked) n++; return n; }
 function updateCounter(){
   const n = selectedCount(), c = $("#counter");
-  c.textContent = "Angehakt: " + n + " von " + DATA.target + " vorgesehen";
+  c.textContent = "Ausgewählt: " + n + " von " + DATA.target + " vorgesehenen Publikationen";
   c.className = "counter" + (n > DATA.target ? " over" : n < DATA.target ? " under" : "");
   for (const tid of state.order){
     const el = document.getElementById("cnt-" + tid);
@@ -498,7 +499,7 @@ function save(){
   a.href = URL.createObjectURL(blob); a.download = "Auswahl_" + slug + "_" + new Date().toISOString().slice(0, 10) + ".zip";
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   state.dirty = false;
-  toast("Gespeichert: " + selectedCount() + " Publikationen angehakt, Paketgröße " + (blob.size / 1048576).toFixed(1) + " MB.");
+  toast("Gespeichert: " + selectedCount() + " Publikationen ausgewählt, Paketgröße " + (blob.size / 1048576).toFixed(1) + " MB.");
 }
 
 async function openPackage(file){
