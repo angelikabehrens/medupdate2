@@ -8,10 +8,17 @@ APP=$BASE/app
 source $BASE/github.env  # GITHUB_TOKEN (nur Lesezugriff auf das Repository)
 AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
 cd $APP
-OLD=$(git rev-parse HEAD)
+OLD=$(git -c safe.directory=$APP rev-parse HEAD)
 git -c safe.directory=$APP -c "http.https://github.com/.extraheader=$AUTH" fetch -q origin main
 NEW=$(git -c safe.directory=$APP rev-parse origin/main)
+# Neue Server-Einrichtung (deploy/VERSION geändert): install.sh erneut ausführen
+deploy_check() {
+  if [ "$(cat $APP/deploy/VERSION 2>/dev/null)" != "$(cat $BASE/.deploy_version 2>/dev/null)" ]; then
+    bash $APP/deploy/install.sh >> /var/log/myluo-install.log 2>&1
+  fi
+}
 if [ "$OLD" = "$NEW" ]; then
+  deploy_check
   exit 0
 fi
 git -c safe.directory=$APP reset -q --hard "$NEW"
@@ -22,5 +29,6 @@ if [ "$REQ" != "$(cat $BASE/.requirements 2>/dev/null)" ]; then
 fi
 install -m 755 $APP/deploy/update.sh $BASE/update.sh
 chown -R myluo:myluo $APP $BASE/venv
+deploy_check
 systemctl restart myluo.service
 echo "Aktualisiert auf $(git -c safe.directory=$APP log --oneline -1)"

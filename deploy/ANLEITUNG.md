@@ -70,6 +70,12 @@ schützt die App wie bei Streamlit Cloud.
 - **GitHub-Schlüssel abgelaufen:** neuen Schlüssel wie in Schritt 1 anlegen, in der Konsole
   `nano /opt/myluo/github.env` öffnen und den Wert ersetzen.
 
+### Auswahlliste als Link (auch fürs Handy)
+
+In der App auf dem Hetzner-Server gibt es in Schritt 1 den Knopf **„Link für Autoren erstellen“**. Den Link
+per Mail an die Autoren schicken; er öffnet sich auf Handy, Tablet und Computer im Browser. Nach Änderungen
+„Link aktualisieren“ drücken, der Link bleibt gleich. „Link löschen“ entfernt die Liste vom Server.
+
 ---
 
 ## B. Notfall-Start auf dem Mac (kostenlos)

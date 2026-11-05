@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import secrets
 import zipfile
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 FORMAT = "myluo-auswahl"
 FORMAT_VERSION = 1
@@ -114,6 +117,38 @@ def sheet_filename(proj: dict, ext: str = "html") -> str:
     return f"Auswahlliste_{slug}_{date.today().isoformat()}.{ext}"
 
 
+# Auswahlliste als Link (Angelika 2026-11-05: auch auf dem Handy öffnen). Nur auf dem eigenen Server
+# (deploy/install.sh): Caddy liefert /opt/myluo/listen unter <Adresse>/liste/ aus. Streamlit Cloud hat keinen
+# dauerhaften Speicher, dort gibt es den Link nicht.
+_LIST_DIR = Path(os.environ.get("MYLUO_LIST_DIR", "/opt/myluo/listen"))
+_ADDRESS_FILE = Path(os.environ.get("MYLUO_ADDRESS_FILE", "/opt/myluo/ADRESSE.txt"))
+
+
+def link_available() -> bool:
+    return _LIST_DIR.is_dir() and os.access(_LIST_DIR, os.W_OK) and _ADDRESS_FILE.is_file()
+
+
+def publish_sheet(proj: dict) -> str:
+    """Legt die Auswahlliste unter einem zufälligen, nicht erratbaren Namen ab und gibt den Link zurück.
+    Ein erneuter Aufruf aktualisiert dieselbe Liste; der Link bleibt gleich."""
+    link = proj.get("sheet_link") or {}
+    token = link.get("token") or secrets.token_urlsafe(18)
+    path = _LIST_DIR / f"{token}.html"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(build_sheet(proj))
+    tmp.chmod(0o644)
+    tmp.replace(path)
+    url = f"{_ADDRESS_FILE.read_text().strip().rstrip('/')}/liste/{token}.html"
+    proj["sheet_link"] = {"token": token, "url": url, "updated": datetime.now().strftime("%d.%m.%Y %H:%M")}
+    return url
+
+
+def unpublish_sheet(proj: dict) -> None:
+    link = proj.pop("sheet_link", None) or {}
+    if link.get("token") and re.fullmatch(r"[A-Za-z0-9_-]+", link["token"]):
+        (_LIST_DIR / f"{link['token']}.html").unlink(missing_ok=True)
+
+
 def read_package(data: bytes) -> tuple[dict, dict[str, bytes]]:
     """Liest das von der Auswahlliste gespeicherte ZIP-Paket: (auswahl.json, {Pfad im ZIP: Bytes})."""
     try:
@@ -191,7 +226,10 @@ padding:9px 10px;margin:6px 0;background:#fff}
 .gl-item{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;margin:4px 0}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
 padding:10px 16px;border-radius:8px;display:none;max-width:90vw;z-index:20}
-@media (max-width:600px){header h1{font-size:16px}.pub{grid-template-columns:20px 22px 1fr}}
+@media (max-width:600px){header{padding:8px 12px;gap:6px 8px}header h1{font-size:15px;flex-basis:100%}
+.counter{font-size:13px;padding:4px 8px;flex:1 1 100%;text-align:center}header button{padding:6px 10px;font-size:13px;flex:1 1 0}
+main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid-column:1 / -1}
+.row select{max-width:100%}.up input{max-width:100%}.btn.small{padding:6px 12px;font-size:14px}}
 </style>
 </head>
 <body>
@@ -207,7 +245,7 @@ padding:10px 16px;border-radius:8px;display:none;max-width:90vw;z-index:20}
     <strong>So geht es:</strong>
     <ol>
       <li>Publikationen anhaken, die gewürdigt werden sollen. Oben sehen Sie, wie viele angehakt sind und wie viele seitens med update vorgesehen sind.</li>
-      <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ die Pfeile oder „Verschieben nach“ verwenden.</li>
+      <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ (und auf dem Handy) die Pfeile oder „Verschieben nach“ verwenden.</li>
       <li>Das PDF direkt bei der Publikation hochladen. Die Datei wird sofort geprüft (DOI oder Titel und Erstautor).</li>
       <li>Weitere, in der Liste nicht aufgeführte Publikationen beim passenden Unterkapitel ergänzen, Leitlinien ganz unten.</li>
       <li>Wenn Sie die Arbeit unterbrechen, speichern Sie Ihre Auswahl der Publikationen mit den von Ihnen hochgeladenen Dateien unter „Auswahl speichern“. Zum Fortsetzen laden Sie die gespeicherte Datei unter „Gespeichertes Paket öffnen“ hoch und arbeiten dort weiter.</li>

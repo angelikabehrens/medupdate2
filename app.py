@@ -408,6 +408,24 @@ if proj.get("toc"):
                            file_name=selection_sheet.sheet_filename(proj, "zip"), mime="application/zip")
         a2.download_button("⬇️ Auswahlliste als HTML-Datei", data=selection_sheet.build_sheet(proj),
                            file_name=selection_sheet.sheet_filename(proj), mime="text/html")
+        if selection_sheet.link_available():
+            st.markdown("**Auswahlliste als Link** (öffnet sich auf Handy, Tablet und Computer im Browser):")
+            l1, l2 = st.columns(2)
+            _link = proj.get("sheet_link")
+            if l1.button("🔗 Link aktualisieren" if _link else "🔗 Link für Autoren erstellen", key="sheet_link_btn"):
+                selection_sheet.publish_sheet(proj)
+                _link = proj["sheet_link"]
+            if _link:
+                st.code(_link["url"], language=None)
+                st.caption(f"Stand der Liste: {_link['updated']}. Diesen Link per Mail an die Autoren schicken. Nach "
+                           "Änderungen in Schritt 1 „Link aktualisieren“ drücken; der Link bleibt gleich. Wer den "
+                           "Link hat, kann die Liste sehen.")
+                if l2.button("🗑️ Link löschen", key="sheet_link_del"):
+                    selection_sheet.unpublish_sheet(proj)
+                    st.rerun()
+        else:
+            st.caption("Ein Link zur Auswahlliste (auch fürs Handy) lässt sich nur in der App auf dem eigenen "
+                       "Hetzner-Server erstellen.")
 
     if proj["errors"]:
         with st.expander(f"⚠️ {len(proj['errors'])} Hinweis(e) aus der Verarbeitung"):

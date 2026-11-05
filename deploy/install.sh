@@ -14,6 +14,9 @@ apt-get install -y -q git python3-venv python3-pip caddy ufw curl
 id myluo >/dev/null 2>&1 || useradd --system --home-dir $BASE/home --shell /usr/sbin/nologin myluo
 mkdir -p $BASE/home && chown myluo:myluo $BASE/home
 
+# Der Code gehört dem Dienstkonto myluo, Aktualisierungen laufen als root: git das erlauben
+git config --system --get-all safe.directory | grep -qx "$APP" || git config --system --add safe.directory "$APP"
+
 # Programmbibliotheken
 [ -x $BASE/venv/bin/python ] || python3 -m venv $BASE/venv
 $BASE/venv/bin/python -m pip install -q --upgrade pip
@@ -30,10 +33,22 @@ chown root:root $BASE/github.env && chmod 600 $BASE/github.env
 # Adresse mit HTTPS-Zertifikat: <IP mit Bindestrichen>.sslip.io zeigt auf diesen Server
 IP=$(curl -fsS http://169.254.169.254/hetzner/v1/metadata/public-ipv4 || hostname -I | awk '{print $1}')
 HOST="${IP//./-}.sslip.io"
+# Auswahllisten für Autoren (per Link, auch auf dem Handy): die App legt sie in $BASE/listen ab,
+# Caddy liefert sie unter /liste/<Zufallsname>.html aus (kein Verzeichnis-Index, nicht für Suchmaschinen)
+mkdir -p $BASE/listen && chown myluo:myluo $BASE/listen && chmod 755 $BASE/listen
+chmod 755 $BASE
 cat > /etc/caddy/Caddyfile <<CADDY
 $HOST {
 	encode gzip
-	reverse_proxy 127.0.0.1:8501
+	handle_path /liste/* {
+		root * $BASE/listen
+		header Cache-Control "no-store"
+		header X-Robots-Tag "noindex, nofollow"
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8501
+	}
 }
 CADDY
 echo "https://$HOST" > $BASE/ADRESSE.txt
@@ -87,4 +102,5 @@ ufw --force enable >/dev/null
 systemctl daemon-reload
 systemctl enable --now myluo.service myluo-update.timer
 systemctl restart caddy
+cp $APP/deploy/VERSION $BASE/.deploy_version 2>/dev/null || true
 echo "MyLuo Pro läuft unter $(cat $BASE/ADRESSE.txt)"
