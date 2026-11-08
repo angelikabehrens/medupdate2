@@ -119,6 +119,19 @@ def render_line_with_bold_label(doc: Document, line: str, in_box: bool = False) 
 # Zitatmarker im Fließtext: "(3)", "(2,4)" oder "[3]" – aber NICHT direkt hinter einem
 
 
+_INITIALS_RE = re.compile(r"^(?:[A-Z]\.?-?){1,4}$")
+
+
+def surname(author: str) -> str:
+    """Nachname aus einer PubMed-Autorenangabe „Nachname Initialen“, auch mehrteilig
+    („van der Pert JC“ → „van der Pert“, „Smith J“ → „Smith“). Ohne Initialen (z.B. Studiengruppe)
+    bleibt die Angabe unverändert."""
+    parts = (author or "").split()
+    if len(parts) > 1 and _INITIALS_RE.match(parts[-1]):
+        parts = parts[:-1]
+    return " ".join(parts)
+
+
 def format_short_citation(first_author: str, journal: str, pubdate: str, lit_numbers: list[int]) -> str:
     """Baut die kompakte Zitierzeile unter dem Publikationstitel:
     'Erstautor et al., Journal Jahr (N)' bzw. '(N,M,...)' bei mehreren zugehörigen

@@ -17,6 +17,8 @@ import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
+from .docx_tools import surname
+
 FORMAT = "myluo-auswahl"
 FORMAT_VERSION = 1
 
@@ -90,7 +92,7 @@ def sheet_data(proj: dict) -> dict:
                       "Reserve" if p in t.get("reserve", []) else "verschoben")
             items.append({
                 "id": p, "checked": p in chosen, "title": rec.get("title", p), "authors": _authors(rec),
-                "first_author": ((rec.get("authors") or [""])[0].split(" ") or [""])[0],
+                "first_author": surname((rec.get("authors") or [""])[0]),
                 "source": _source(rec), "doi": rec.get("doi", ""), "pmid": p if p.isdigit() else "",
                 "priority": it.get("priority", ""), "quality": it.get("quality", ""),
                 "design": it.get("study_design", ""), "rationale": it.get("rationale", ""),

@@ -12,6 +12,7 @@ import requests
 from docx import Document
 from pypdf import PdfReader
 
+from .docx_tools import surname
 from .http import BROWSER_HEADERS, request_with_retry
 
 
@@ -156,7 +157,7 @@ def upload_matches(extracted_text: str, rec: dict) -> bool:
             head_words = set(re.findall(r"[a-z0-9]+", _fold(head)))
             title_match = sum(w in head_words for w in words) / len(words) >= 0.9
     authors = rec.get("authors") or []
-    first = authors[0].split(" ")[0] if authors else ""
+    first = surname(authors[0]) if authors else ""
     author_match = bool(first) and _normalize(first) in norm_text
     return title_match and (author_match or not first)
 

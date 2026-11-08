@@ -12,7 +12,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 
-from .docx_tools import (KURZ_HEADINGS, KURZ_MARK, _SKILL_BOLD_LABELS, add_field, add_floating_picture,
+from .docx_tools import (KURZ_HEADINGS, surname, KURZ_MARK, _SKILL_BOLD_LABELS, add_field, add_floating_picture,
                          render_line_with_bold_label, style_document)
 
 _COMMENT_LABELS = ("kommentar:", "comment:")
@@ -37,7 +37,7 @@ def _label_of(line: str) -> str | None:
 def short_citation(rec: dict, lit_numbers: list[int]) -> str:
     """'Erstautor et al., Journal Jahr (N)' – wie format_short_citation in MyLuo."""
     authors = rec.get("authors") or []
-    first = authors[0].split(" ")[0] if authors else "?"
+    first = surname(authors[0]) if authors else "?"
     nums = ",".join(str(n) for n in lit_numbers)
     return f"{first} et al., {rec.get('journal', '')} {rec.get('year', '')} ({nums})".strip()
 
@@ -165,7 +165,7 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
                         img_n += 1
                         prefix = f"Abb. {img_n}"
                     authors = pub["rec"].get("authors") or ["?"]
-                    ref = f"{authors[0]} et al., {pub['rec'].get('journal', '')}. {pub['rec'].get('year', '')}"
+                    ref = f"{surname(authors[0])} et al., {pub['rec'].get('journal', '')}. {pub['rec'].get('year', '')}"
                     cp = doc.add_paragraph()
                     cp.add_run(f"{prefix}: {fig.get('caption', '').rstrip('.')}. {ref} (1)").italic = True
                 except Exception:
