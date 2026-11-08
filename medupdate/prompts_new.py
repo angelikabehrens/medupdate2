@@ -162,6 +162,24 @@ Link zur Volltext-PDF (falls gefunden), frei zugänglich ja/nein, und warum sie 
 Erfinde keine Leitlinien, Links oder Jahreszahlen – nenne nur, was du in der Recherche tatsächlich gefunden hast."""
 
 
+def guideline_need_prompt(topic: str, pubs_block: str, guidelines_block: str, max_n: int) -> str:
+    return f"""Ein ärztliches Fortbildungshandbuch würdigt im Unterkapitel „{topic}“ die folgenden Publikationen. \
+Bei jeder Würdigung wird geprüft, was die Studie für die Praxis bedeutet, gemessen an den aktuellen Leitlinien.
+
+Publikationen:
+{pubs_block}
+
+Leitlinien zum Thema:
+{guidelines_block}
+
+Wähle unter den Leitlinien, die NICHT verfügbar sind, höchstens {max_n} aus, die die Autoren hochladen sollen. \
+Wähle eine Leitlinie nur, wenn sie die Würdigung dieser konkreten Publikationen inhaltlich deutlich verbessern \
+würde (die Studien behandeln Fragen, zu denen die Leitlinie Empfehlungen gibt) und eine bereits verfügbare \
+Leitlinie diese Fragen nicht schon abdeckt. Lieber keine als eine überflüssige Leitlinie anfragen. \
+"reason": ein kurzer deutscher Satz (höchstens 15 Wörter), wofür die Leitlinie gebraucht wird, z.B. \
+"Für die Einordnung der Therapieempfehlungen zur Erstlinie". Keine Anfrage nötig → leere Liste."""
+
+
 def guideline_extract_prompt(research_text: str) -> str:
     return f"""Übertrage die folgende Leitlinienrecherche in die strukturierte Form. Übernimm nur \
 Angaben, die im Text stehen; fehlende Angaben bleiben leer. Links nur exakt so übernehmen, wie sie im \

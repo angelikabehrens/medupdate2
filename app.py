@@ -268,6 +268,7 @@ if go1:
             pipeline.run_intake(llm, proj, toc_text, guide_text, template, log)
             pipeline.run_recommendations(llm, proj, log)
             pipeline.run_guideline_search(llm, proj, log)
+            pipeline.run_guideline_needs(llm, proj, log)
 
         run_with_status("Schritt 1 läuft", step1, llm)
 
@@ -403,6 +404,16 @@ if proj.get("toc"):
         st.markdown("**Auswahlliste für die Autoren** (zum Versenden per Mail): Die Autoren haken Publikationen "
                     "an, ändern die Reihenfolge, laden PDFs und Leitlinien hoch und speichern alles als ZIP-Paket. "
                     "Das Paket laden Sie in Schritt 2 hoch.")
+        if any(t.get("guidelines") and "gl_need" not in t
+                       for t in proj["topics"].values() if t.get("enabled", True)):
+            st.caption("Die Liste fragt noch alle fehlenden Leitlinien bei den Autoren an. Mit dem Knopf bestimmt die "
+                       "KI, welche Leitlinien die Würdigungen wirklich verbessern; nur diese werden angefragt.")
+            if st.button("🔎 Benötigte Leitlinien bestimmen (ca. 0,01 USD je Unterkapitel)", disabled=_running,
+                         key="gl_need_btn"):
+                _gl_llm = get_llm(CHECK_BUDGET_USD)
+                if _gl_llm:
+                    run_with_status("Benötigte Leitlinien werden bestimmt",
+                                    lambda log: pipeline.run_guideline_needs(_gl_llm, proj, log), _gl_llm)
         a1, a2 = st.columns(2)
         a1.download_button("⬇️ Auswahlliste als ZIP (für Mail empfohlen)", data=selection_sheet.build_sheet_zip(proj),
                            file_name=selection_sheet.sheet_filename(proj, "zip"), mime="application/zip")

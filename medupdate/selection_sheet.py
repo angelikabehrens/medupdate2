@@ -35,6 +35,20 @@ def _source(rec: dict) -> str:
     return src
 
 
+def _sheet_guidelines(t: dict) -> list[dict]:
+    """Leitlinien eines Unterkapitels für die Auswahlliste. need: "ja" = bei den Autoren anfragen,
+    "nein" = nicht nötig (wird nicht angezeigt), "" = noch nicht bestimmt (alte Projekte)."""
+    gn = t.get("gl_need")
+    req = {r["index"]: r.get("reason", "") for r in (gn or {}).get("requests", [])}
+    out = []
+    for i, g in enumerate(t.get("guidelines") or []):
+        loaded = bool(g.get("text"))
+        need = "" if gn is None or loaded else ("ja" if i in req else "nein")
+        out.append({"title": g.get("title", ""), "society": g.get("society", ""), "year": g.get("year", ""),
+                    "loaded": loaded, "need": need, "reason": req.get(i, "")})
+    return out
+
+
 def target_count(proj: dict) -> tuple[int, str]:
     """Wie viele Publikationen ausgewählt werden sollen: Höchstzahl aus Schritt 1, sonst die Summe der
     Würdigungslängen (lang + mittel + kurz + Kurznachricht)."""
@@ -88,9 +102,7 @@ def sheet_data(proj: dict) -> dict:
                        "section": f"{t.get('section_number', '')} {t.get('section_title', '')}".strip()
                        if t.get("section_title") and t.get("section_title") != t["title"] else "",
                        "items": items,
-                       "guidelines": [{"title": g.get("title", ""), "society": g.get("society", ""),
-                                       "year": g.get("year", ""), "loaded": bool(g.get("text"))}
-                                      for g in t.get("guidelines") or []]})
+                       "guidelines": _sheet_guidelines(t)})
     n, why = target_count(proj)
     toc = proj.get("toc") or {}
     return {"format": FORMAT, "version": FORMAT_VERSION, "project_id": proj.get("id", ""),
@@ -223,6 +235,7 @@ padding:9px 10px;margin:6px 0;background:#fff}
 .st.info{background:var(--mist);color:var(--ink)}
 .extra-box{border-top:1px solid var(--line);padding:8px 14px;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .gl{font-size:13px;color:var(--muted);padding:4px 14px 8px}
+.gl-want{color:var(--ink);background:var(--ochre-tint);margin:4px 10px;border-radius:6px;padding:6px 12px}.gl-want ul{margin:4px 0 0 18px;padding:0}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:22px 0}
 .panel h2{font:600 17px Cambria,Georgia,serif;margin:0 0 6px}
 .gl-item{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;margin:4px 0}
@@ -409,6 +422,20 @@ function pubHtml(id, tid, idx, n){
     "</div></div>";
 }
 
+function glName(g){ return esc(g.title) + (g.society ? " (" + esc(g.society) + (g.year ? ", " + esc(g.year) : "") + ")" : ""); }
+function glHtml(gls){
+  if (!gls.length) return "";
+  if (gls.some(g => !g.loaded && !g.need))  // ältere Liste ohne Bedarfsprüfung
+    return '<div class="gl">Leitlinien: ' + gls.map(g => glName(g) + (g.loaded ? " ✓" : " – bitte unten hochladen, falls vorhanden")).join("; ") + "</div>";
+  const have = gls.filter(g => g.loaded), want = gls.filter(g => g.need === "ja");
+  let h = "";
+  if (want.length) h += '<div class="gl gl-want"><b>Bitte unten hochladen, falls vorhanden:</b><ul>' +
+    want.map(g => "<li>" + glName(g) + (g.reason ? " – " + esc(g.reason) : "") + "</li>").join("") + "</ul></div>";
+  if (have.length) h += '<div class="gl">Liegen der KI bereits vor: ' + have.map(g => glName(g) + " ✓").join("; ") + "</div>";
+  if (!want.length) h += '<div class="gl">Weitere Leitlinien werden für dieses Unterkapitel nicht benötigt.</div>';
+  return h;
+}
+
 function render(){
   const root = $("#topics"); let html = "", lastSec = null;
   for (const tid of state.order){
@@ -418,8 +445,7 @@ function render(){
     html += '<div class="topic"><div class="topic-head"><h3>' + esc(topicLabel(tid)) + '</h3><span class="topic-count" id="cnt-' + esc(tid) + '"></span></div>';
     html += '<div class="list" data-topic="' + esc(tid) + '">' +
       (items.length ? items.map((id, i) => pubHtml(id, tid, i, items.length)).join("") : '<div class="empty">Noch keine Publikation. Hierher ziehen oder unten hochladen.</div>') + "</div>";
-    if (m.guidelines && m.guidelines.length)
-      html += '<div class="gl">Leitlinien: ' + m.guidelines.map(g => esc(g.title) + (g.society ? " (" + esc(g.society) + (g.year ? ", " + esc(g.year) : "") + ")" : "") + (g.loaded ? " ✓" : " – bitte unten hochladen, falls vorhanden")).join("; ") + "</div>";
+    html += glHtml(m.guidelines || []);
     html += '<div class="extra-box">Weitere Publikationen zu diesem Unterkapitel (PDF): <label class="filebtn">Datei hochladen<input type="file" accept=".pdf,application/pdf" multiple data-act="extra" data-topic="' + esc(tid) + '"></label></div></div>';
   }
   root.innerHTML = html;

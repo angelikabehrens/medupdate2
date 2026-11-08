@@ -284,6 +284,60 @@ def run_guideline_search(llm: LLM, proj: dict, log) -> None:
             proj["topics"][tid]["guidelines"] = res
 
 
+GL_NEED_SCHEMA = obj({"requests": arr(obj({"index": {"type": "integer"}, "reason": STR}))})
+GL_NEED_MAX = 2  # höchstens so viele Leitlinien je Unterkapitel bei den Autoren anfragen
+
+
+def _gl_need_key(t: dict) -> str:
+    pubs = t.get("selected", t.get("recommended", []))
+    gls = [(g.get("title", ""), bool(g.get("text"))) for g in t.get("guidelines") or []]
+    return hashlib.sha1(json.dumps([sorted(pubs), gls], ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def run_guideline_needs(llm: LLM, proj: dict, log, force: bool = False) -> None:
+    """Bestimmt je Unterkapitel, welche (nicht frei geladenen) Leitlinien die Würdigung der ausgewählten
+    Publikationen inhaltlich verbessern würden. Nur diese werden in der Auswahlliste bei den Autoren
+    angefragt. Ein schneller Aufruf ohne Websuche je Unterkapitel (wenige Cent)."""
+    todo = []
+    for tid, t in proj["topics"].items():
+        if not t.get("enabled", True):
+            continue
+        missing = [i for i, g in enumerate(t.get("guidelines") or []) if not g.get("text")]
+        pubs = t.get("selected", t.get("recommended", []))
+        key = _gl_need_key(t)
+        if not missing or not pubs:
+            t["gl_need"] = {"key": key, "requests": []}
+        elif force or (t.get("gl_need") or {}).get("key") != key:
+            todo.append((tid, t))
+
+    def work(t):
+        gls = t.get("guidelines") or []
+        g_block = "\n".join(
+            f"[{i}] {g.get('title', '')} ({g.get('society', '')}, {g.get('year', '')}) – "
+            + ("liegt der KI bereits im Volltext vor" if g.get("text") else "NICHT verfügbar")
+            + (f". Relevanz laut Recherche: {g.get('relevance')}" if g.get("relevance") else "")
+            for i, g in enumerate(gls))
+        p_block = "\n".join(f"- {(proj['records'].get(p) or {}).get('title', p)}"
+                             for p in t.get("selected", t.get("recommended", [])))
+        res = llm.json(P.guideline_need_prompt(t["title"], p_block, g_block, GL_NEED_MAX), GL_NEED_SCHEMA,
+                       model=MODEL_FAST, max_tokens=1500, effort="low")
+        out, seen = [], set()
+        for r in res.get("requests", []):
+            i = r.get("index")
+            if isinstance(i, int) and 0 <= i < len(gls) and not gls[i].get("text") and i not in seen:
+                seen.add(i)
+                out.append({"index": i, "reason": (r.get("reason") or "").strip()})
+        return {"key": _gl_need_key(t), "requests": out[:GL_NEED_MAX]}
+
+    if not todo:
+        return
+    for tid, res in _parallel(todo, work, log, "Benötigte Leitlinien bestimmen").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Leitlinienbedarf {proj['topics'][tid]['title']}", res)
+        else:
+            proj["topics"][tid]["gl_need"] = res
+
+
 def recommendation_docx(proj: dict) -> bytes:
     rankings = {}
     for t in proj["topics"].values():
@@ -846,12 +900,16 @@ def _pub_list(proj: dict) -> list[tuple[str, str]]:
 def _guideline_docs(proj: dict, tid: str, query: str, per_doc: int = 6000, total: int = 14000) -> list:
     docs = []
     t = proj["topics"][tid]
+    # Von den Autoren gezielt hochgeladene Leitlinien zuerst, damit sie nicht an der Gesamtgrenze scheitern
+    for name, g in proj.get("guideline_uploads", {}).items():
+        if g.get("topic_id") == tid and g.get("text"):
+            docs.append((f"Vom Autor bereitgestellt: {name}", G.relevant_excerpt(g["text"], query, per_doc)))
     for g in t.get("guidelines", []):
         if g.get("text"):
             label = f"Leitlinie: {g.get('title', '')} ({g.get('society', '')}, {g.get('year', '')})"
             docs.append((label, G.relevant_excerpt(g["text"], query, per_doc)))
     for name, g in proj.get("guideline_uploads", {}).items():
-        if g.get("topic_id") in ("", tid) and g.get("text"):
+        if g.get("topic_id") == "" and g.get("text"):
             docs.append((f"Vom Autor bereitgestellt: {name}", G.relevant_excerpt(g["text"], query, per_doc)))
     out, used = [], 0
     for name, text in docs:

@@ -799,6 +799,34 @@ def test_compact_note():
     assert "höchstens 3 kurze" in _compact_note({"comment": True}, "1,5 Seiten (Lang)")
 
 
+def test_guideline_needs():
+    """Nur Leitlinien, die die KI nicht hat und die die Würdigungen verbessern, werden angefragt."""
+    from medupdate import selection_sheet as S
+    calls = []
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            calls.append(prompt)
+            assert "NICHT verfügbar" in prompt and "Barrett study" in prompt
+            return {"requests": [{"index": 1, "reason": "Für die Therapieempfehlungen"},
+                                 {"index": 0, "reason": "liegt schon vor"}, {"index": 9, "reason": "x"}]}
+    proj = pipeline.new_project()
+    proj["records"] = {"1": {"title": "Barrett study"}}
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "Barrett", "recommended": ["1"],
+               "guidelines": [{"title": "S2k Barrett", "text": "x" * 4000}, {"title": "ESGE Barrett"},
+                              {"title": "ACG Barrett"}]},
+        "T2": {"id": "T2", "title": "Leer", "recommended": ["1"], "guidelines": [{"title": "G", "text": "y"}]}}
+    pipeline.run_guideline_needs(L(), proj, lambda *a: None)
+    assert proj["topics"]["T1"]["gl_need"]["requests"] == [{"index": 1, "reason": "Für die Therapieempfehlungen"}]
+    assert proj["topics"]["T2"]["gl_need"]["requests"] == [] and len(calls) == 1
+    pipeline.run_guideline_needs(L(), proj, lambda *a: None)  # unverändert → kein neuer Aufruf
+    assert len(calls) == 1
+    gl = S._sheet_guidelines(proj["topics"]["T1"])
+    assert [g["need"] for g in gl] == ["", "ja", "nein"] and gl[1]["reason"]
+    assert S._sheet_guidelines({"guidelines": [{"title": "A"}]})[0]["need"] == ""  # altes Projekt
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_direct_upload()
@@ -817,6 +845,7 @@ if __name__ == "__main__":
     test_sota_choice()
     test_transition_slots()
     test_selection_package()
+    test_guideline_needs()
     test_sota_trailing_note()
     test_full_pipeline()
     test_comment_box()
