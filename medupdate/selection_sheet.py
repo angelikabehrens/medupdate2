@@ -190,7 +190,9 @@ header button.primary{background:var(--ochre);color:#fff;font-weight:600}
 main{max-width:1050px;margin:0 auto;padding:16px}
 .intro{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:16px}
 .intro ol{margin:6px 0 0 18px;padding:0}
-.intro label{display:inline-block;margin-top:8px}
+.intro label.editor{display:block;margin:0 0 10px}
+.filebtn{display:inline-block;font-size:13px;border-radius:6px;padding:4px 10px;background:var(--mist);border:1px solid var(--line);cursor:pointer}
+.filebtn{position:relative}.filebtn input{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden}
 .intro input[type=text]{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:4px;width:260px;max-width:100%}
 h2.section{font:600 19px Cambria,Georgia,serif;margin:26px 0 8px;color:var(--green)}
 .topic{background:var(--card);border:1px solid var(--line);border-radius:8px;margin:10px 0 14px;overflow:hidden}
@@ -249,29 +251,28 @@ main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid
 <header>
   <h1 id="hd">Auswahlliste</h1>
   <span class="counter" id="counter">0 von 0</span>
-  <button id="openBtn" title="Ein früher gespeichertes Paket wieder öffnen">Gespeichertes Paket öffnen</button>
+  <button id="openBtn" title="Eine früher gespeicherte Arbeitsliste wieder öffnen">Gespeicherte Arbeitsliste öffnen</button>
   <button class="primary" id="saveBtn">Auswahl speichern</button>
   <input type="file" id="openFile" accept=".zip" hidden>
 </header>
 <main>
   <div class="intro">
+    <label class="editor">Bearbeitet von: <input type="text" id="editor" placeholder="Name"></label>
     <strong>So geht es:</strong>
     <ol>
-      <li>Publikationen anhaken, die gewürdigt werden sollen. Oben sehen Sie, wie viele angehakt sind und wie viele seitens med update vorgesehen sind.</li>
+      <li>Die Literaturliste ist nach Unterthemen gegliedert. Gehen Sie die Publikationen in den einzelnen Unterkapiteln durch. Zu jeder Arbeit finden Sie einen direkten Link zu PubMed („PubMed“) oder zur Zeitschrift („DOI“), jeweils anklicken. Unter der Publikation finden Sie die Qualitätsbeurteilung durch die KI. Die gelbe Markierung „Empfehlung“ weist darauf hin, dass es sich um eine relevante Publikation handelt (in der Regel multizentrische RCTs). Setzen Sie ein Häkchen bei jeder Publikation, die im Handbuch gewürdigt werden soll. Das Häkchen kennzeichnet Ihre Auswahl. Die Anzeige oberhalb der Liste zählt die ausgewählten Publikationen mit und zeigt die von med update vorgesehene Höchstzahl. Bitte wählen Sie nicht mehr Publikationen aus, als dort vorgesehen sind. Sie können Ihre Auswahl jederzeit ändern.</li>
       <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ (und auf dem Handy) die Pfeile oder „Verschieben nach …“ verwenden.</li>
-      <li>Das PDF direkt bei der Publikation hochladen. Die Datei wird sofort geprüft (DOI oder Titel und Erstautor).</li>
-      <li>Weitere, in der Liste nicht aufgeführte Publikationen beim passenden Unterkapitel ergänzen, Leitlinien ganz unten.</li>
-      <li>Wenn Sie die Arbeit unterbrechen, speichern Sie Ihre Auswahl der Publikationen mit den von Ihnen hochgeladenen Dateien unter „Auswahl speichern“. Zum Fortsetzen laden Sie die gespeicherte Datei unter „Gespeichertes Paket öffnen“ hoch und arbeiten dort weiter.</li>
-      <li>„Auswahl speichern“ erzeugt ein ZIP-Paket. Dieses Paket bitte zurückschicken (bei großen Paketen per Cloud-Link).</li>
+      <li>Bitte laden Sie die PDF-Datei der Publikation direkt bei der Publikation hoch („Datei hochladen“). Die Datei wird sofort geprüft, ob es sich um die korrekte Publikation handelt.</li>
+      <li>Weitere von Ihnen gewünschte Publikationen, die sich nicht in der Liste befinden, bitte am Ende des jeweiligen Unterkapitels unter „Weitere Publikationen zu diesem Unterkapitel“ hochladen. Leitlinien bitte unterhalb der Literaturliste in der Leitlinienbox hochladen. Bitte laden Sie ausschließlich Leitlinien mit relevantem Bezug hoch. Die KI kann auf öffentlich zugängliche Leitlinien zugreifen. Sollten Sie eine neue Leitlinie als Publikation würdigen wollen, ergänzen Sie diese als „weitere Publikation“ im entsprechenden Unterkapitel.</li>
+      <li>Wenn Sie die Arbeit unterbrechen, speichern Sie Ihre Auswahl der Publikationen mit den von Ihnen hochgeladenen Dateien unter „Auswahl speichern“. Es wird eine ZIP-Datei erstellt, die Sie in Ihrem Download-Ordner finden (ggf. Download erlauben). Zum Fortsetzen laden Sie die gespeicherte Datei unter „Gespeicherte Arbeitsliste öffnen“ hoch und arbeiten dort weiter.</li>
+      <li>Wenn Sie Ihre Bearbeitung abgeschlossen haben, speichern Sie das Ergebnis erneut unter „Auswahl speichern“. Es entsteht wiederum eine ZIP-Datei. Diese schicken Sie je nach Größe per Mail oder meist über einen Cloud-Link (z. B. WeTransfer) an <b>proapp@myluo.io</b>.</li>
     </ol>
-    <label>Bearbeitet von: <input type="text" id="editor" placeholder="Name"></label>
-    <div class="meta" id="targetNote"></div>
   </div>
   <div id="topics"></div>
   <div class="panel">
     <h2>Leitlinien</h2>
     <div class="meta">Aktuelle Leitlinien als PDF hochladen und dem passenden Unterkapitel zuordnen.</div>
-    <div class="up" style="margin-top:6px"><input type="file" id="glFile" accept=".pdf,application/pdf" multiple></div>
+    <div class="up" style="margin-top:6px"><label class="filebtn">Leitlinie hochladen<input type="file" id="glFile" accept=".pdf,application/pdf" multiple></label></div>
     <div id="glList"></div>
   </div>
 </main>
@@ -297,7 +298,6 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;
 function init(){
   $("#hd").textContent = "Auswahlliste " + (DATA.chapter || "");
   document.title = "Auswahlliste " + (DATA.chapter || "Literatur");
-  $("#targetNote").textContent = "Vorgesehen: " + DATA.target + " Publikationen (" + DATA.target_note + ").";
   for (const t of DATA.topics){
     state.order.push(t.id);
     state.topics[t.id] = {meta: t, items: t.items.map(i => i.id)};
@@ -390,7 +390,7 @@ function pubHtml(id, tid, idx, n){
   } else if (p.kind === "pub" && (p.has_fulltext || p.is_oa)){
     st = '<span class="st info">Volltext ' + (p.has_fulltext ? "liegt der App bereits vor" : "frei verfügbar (Open Access)") + ", Upload optional</span>";
   }
-  const up = p.kind === "pub" ? '<span class="up">PDF: <input type="file" accept=".pdf,application/pdf" data-act="upload" data-id="' + esc(id) + '"></span>' : "";
+  const up = p.kind === "pub" ? '<span class="up">PDF: <label class="filebtn">Datei hochladen<input type="file" accept=".pdf,application/pdf" data-act="upload" data-id="' + esc(id) + '"></label></span>' : "";
   const rm = p.kind === "extra" ? '<button class="btn small" data-act="rmextra" data-id="' + esc(id) + '">Entfernen</button>' : "";
   return '<div class="pub' + (p.checked ? "" : " off") + '" draggable="true" data-id="' + esc(id) + '">' +
     '<span class="handle" title="Ziehen zum Verschieben">⠿</span>' +
@@ -420,7 +420,7 @@ function render(){
       (items.length ? items.map((id, i) => pubHtml(id, tid, i, items.length)).join("") : '<div class="empty">Noch keine Publikation. Hierher ziehen oder unten hochladen.</div>') + "</div>";
     if (m.guidelines && m.guidelines.length)
       html += '<div class="gl">Leitlinien: ' + m.guidelines.map(g => esc(g.title) + (g.society ? " (" + esc(g.society) + (g.year ? ", " + esc(g.year) : "") + ")" : "") + (g.loaded ? " ✓" : " – bitte unten hochladen, falls vorhanden")).join("; ") + "</div>";
-    html += '<div class="extra-box">Weitere Publikation zu diesem Unterkapitel (PDF): <input type="file" accept=".pdf,application/pdf" multiple data-act="extra" data-topic="' + esc(tid) + '"></div></div>';
+    html += '<div class="extra-box">Weitere Publikationen zu diesem Unterkapitel (PDF): <label class="filebtn">Datei hochladen<input type="file" accept=".pdf,application/pdf" multiple data-act="extra" data-topic="' + esc(tid) + '"></label></div></div>';
   }
   root.innerHTML = html;
   renderGl();
@@ -577,7 +577,7 @@ function save(){
   a.href = URL.createObjectURL(blob); a.download = "Auswahl_" + slug + "_" + new Date().toISOString().slice(0, 10) + ".zip";
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   state.dirty = false;
-  toast("Gespeichert: " + selectedCount() + " Publikationen ausgewählt, Paketgröße " + (blob.size / 1048576).toFixed(1) + " MB.");
+  toast("Gespeichert: " + selectedCount() + " Publikationen ausgewählt, Dateigröße " + (blob.size / 1048576).toFixed(1) + " MB.");
 }
 
 async function openPackage(file){
@@ -585,7 +585,7 @@ async function openPackage(file){
   try{ files = readZip(await file.arrayBuffer()); }catch(e){ toast("Das Paket konnte nicht gelesen werden. Bitte das mit „Auswahl speichern“ erzeugte ZIP verwenden."); return; }
   const metaBuf = files["auswahl.json"]; if (!metaBuf){ toast("Im Paket fehlt „auswahl.json“."); return; }
   const meta = JSON.parse(new TextDecoder().decode(metaBuf));
-  if (meta.project_id && DATA.project_id && meta.project_id !== DATA.project_id && !confirm("Das Paket gehört zu einer anderen Auswahlliste. Trotzdem öffnen?")) return;
+  if (meta.project_id && DATA.project_id && meta.project_id !== DATA.project_id && !confirm("Diese Datei gehört zu einer anderen Auswahlliste. Trotzdem öffnen?")) return;
   const known = new Set(state.order), placed = new Set();
   const newItems = {}; for (const tid of state.order) newItems[tid] = [];
   for (const t of meta.topics || []){
@@ -606,7 +606,7 @@ async function openPackage(file){
   for (const tid of state.order) state.topics[tid].items = newItems[tid];
   state.guidelines = (meta.guidelines || []).filter(g => files[g.file]).map(g => ({file: {name: g.file_name, buf: files[g.file]}, topic: g.topic_id || "", pdf: true}));
   if (meta.edited_by) $("#editor").value = meta.edited_by;
-  state.dirty = false; render(); toast("Paket geöffnet.");
+  state.dirty = false; render(); toast("Arbeitsliste geöffnet.");
 }
 
 $("#saveBtn").addEventListener("click", save);
