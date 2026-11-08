@@ -41,6 +41,16 @@ PLAN_SCHEMA = obj({
     "exclusion": STR,
 })
 
+# Kapitelanalyse: Wie ist das Inhaltsverzeichnis gegliedert, welcher Suchbegriff gehört in jede Suche?
+FRAME_SCHEMA = obj({
+    "chapter_en": STR,
+    "structure": enum("methode", "krankheit", "gemischt"),
+    "structure_note": STR,
+    "anchor_query": STR,
+    "journals": arr(STR),
+    "topics": arr(obj({"id": STR, "title_en": STR, "searchable": BOOL, "aspect_query": STR, "note": STR})),
+})
+
 RANK_SCHEMA = obj({
     "items": arr(obj({
         "pmid": STR,
@@ -69,12 +79,74 @@ def time_window(recency_months: int, today: date | None = None) -> tuple[date, d
     return today - timedelta(days=int(months * 30.4)), today
 
 
-def plan_search(llm: LLM, topic: dict, chapter: str, von: date, bis: date) -> dict:
+def topic_path(topic: dict) -> str:
+    """Gliederungspfad eines Themas, z.B. „Rupturiertes AAA › Anästhesie und Zugangsart bei rEVAR“."""
+    parts = [topic.get("section_title", ""), topic.get("subsection_title", ""), topic.get("title", "")]
+    out = []
+    for x in parts:
+        x = (x or "").strip()
+        if x and x not in out:
+            out.append(x)
+    return " › ".join(out)
+
+
+def analyze_chapter(llm: LLM, chapter: str, topics: list[dict]) -> dict:
+    """Ein Aufruf je Kapitel: englischer Titel, Art der Gliederung (Methode/Krankheit/gemischt), ein
+    PubMed-Anker für alle Suchen, je Thema der englische Titel, ob es überhaupt suchbar ist, und ein
+    optionaler Aspekt (z.B. Chirurgie), der nur bei passenden Themen dazukommt."""
+    block = "\n".join(f"{t['id']}: {t.get('number', '')} {topic_path(t)}".strip() for t in topics)
+    data = llm.json(P.chapter_frame_prompt(chapter, block), FRAME_SCHEMA, model=MODEL_MAIN, max_tokens=12000)
+    known = {t["id"] for t in topics}
+    data["topics"] = {x["id"]: x for x in data.get("topics", []) if x.get("id") in known}
+    return data
+
+
+def plan_search(llm: LLM, topic: dict, chapter: str, von: date, bis: date, frame: dict | None = None) -> dict:
+    ft = ((frame or {}).get("topics") or {}).get(topic.get("id"), {})
     return llm.json(
         P.search_plan_prompt(topic["title"], topic.get("english_search_focus", ""), chapter,
-                             von.strftime("%d.%m.%Y"), bis.strftime("%d.%m.%Y")),
+                             von.strftime("%d.%m.%Y"), bis.strftime("%d.%m.%Y"),
+                             path=topic_path(topic), title_en=ft.get("title_en", ""),
+                             anchor=(frame or {}).get("anchor_query", ""), aspect=ft.get("aspect_query", ""),
+                             structure=(frame or {}).get("structure", "")),
         PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000,
     )
+
+
+def _suffix(von: date, bis: date) -> str:
+    return f" AND {pubmed.date_filter(von, bis)} AND (english[la] OR german[la]) AND hasabstract"
+
+
+def count_queries(queries: list[dict], von: date, bis: date, email: str) -> dict:
+    """Trefferzahlen je Suchstring (nur PubMed, keine KI-Kosten)."""
+    out = {}
+    for q in queries:
+        if not (q.get("query") or "").strip():
+            continue
+        try:
+            out[q["name"]] = pubmed.search(f"({q['query']}){_suffix(von, bis)}", 0, email)[1]
+        except Exception as ex:
+            out[q["name"]] = f"Fehler: {ex}"
+    return out
+
+
+SAFETY_HIGH_EVIDENCE = ("(randomized controlled trial[pt] OR meta-analysis[pt] OR systematic[sb] OR "
+                        "guideline[pt] OR practice guideline[pt] OR consensus[tiab])")
+
+
+def safety_queries(frame: dict) -> list[dict]:
+    """Sicherheitsnetz je Kapitel: findet auch Arbeiten zu Themen, die (noch) nicht im Inhaltsverzeichnis
+    stehen. Hohe Evidenz, Top-Journale und der Anker allein."""
+    anchor = (frame.get("anchor_query") or "").strip()
+    if not anchor:
+        return []
+    qs = [{"name": "netz_evidenz", "query": f"({anchor}) AND {SAFETY_HIGH_EVIDENCE}"}]
+    journals = [j.strip().replace('"', "") for j in frame.get("journals") or [] if j.strip()]
+    top = ["N Engl J Med", "Lancet", "JAMA", "BMJ"]
+    js = list(dict.fromkeys(top + journals))[:14]
+    qs.append({"name": "netz_journale", "query": f"({anchor}) AND (" + " OR ".join(f'"{j}"[ta]' for j in js) + ")"})
+    qs.append({"name": "netz_anker", "query": anchor})
+    return qs
 
 
 MIN_CANDIDATES = 8
@@ -91,10 +163,12 @@ def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
 def collect_candidates(plan: dict, von: date, bis: date, email: str,
                        limit: int = MAX_CANDIDATES_PER_TOPIC) -> tuple[list[str], dict]:
     """Führt alle Suchstrategien aus und mischt die Treffer im Reißverschlussverfahren."""
-    suffix = f" AND {pubmed.date_filter(von, bis)} AND (english[la] OR german[la]) AND hasabstract"
+    suffix = _suffix(von, bis)
     per_query: list[list[str]] = []
     stats = {}
     for q in plan.get("queries", []):
+        if not (q.get("query") or "").strip():
+            continue
         try:
             ids, count = pubmed.search(f"({q['query']}){suffix}", limit, email)
         except Exception as ex:  # eine fehlerhafte Strategie soll die anderen nicht blockieren
@@ -220,12 +294,28 @@ def manual_window(window: list[str] | None) -> tuple[date, date] | None:
     return (von, bis) if von <= bis else (bis, von)
 
 
+def search_window(rules: dict, window: list[str] | None = None) -> tuple[date, date]:
+    return manual_window(window) or time_window(rules.get("recency_months", 0))
+
+
+def with_manual(plan: dict, manual: str) -> dict:
+    """Eigene Suchbegriffe der Autorin als zusätzliche Strategie (bleiben neben dem KI-Suchplan erhalten)."""
+    manual = (manual or "").strip()
+    qs = [q for q in plan.get("queries", []) if q.get("name") != "eigene"]
+    if manual:
+        qs.append({"name": "eigene", "query": manual})
+    return {**plan, "queries": qs}
+
+
 def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str,
-                        n_max: int, log=lambda msg: None, window: list[str] | None = None) -> dict:
+                        n_max: int, log=lambda msg: None, window: list[str] | None = None,
+                        plan: dict | None = None, frame: dict | None = None) -> dict:
     fixed = manual_window(window)
     von, bis = fixed or time_window(rules.get("recency_months", 0))
-    log(f"Suchstrategie für „{topic['title']}“ wird entwickelt…")
-    plan = plan_search(llm, topic, chapter, von, bis)
+    if plan is None:
+        log(f"Suchstrategie für „{topic['title']}“ wird entwickelt…")
+        plan = plan_search(llm, topic, chapter, von, bis, frame)
+    plan = with_manual(plan, topic.get("manual_query", ""))
     log(f"PubMed-Suche für „{topic['title']}“…")
     pmids, stats = collect_candidates(plan, von, bis, email)
     attempts = [{"window": [von.isoformat(), bis.isoformat()], "queries": plan.get("queries", []), "hits": stats}]

@@ -188,6 +188,64 @@ def tolerance_text(proj: dict) -> str:
     return f"{tol['value']} Seiten bzw. {tol['value']} Literaturstellen"
 
 
+SAFETY = "NEU"  # Sicherheitsnetz: wichtige Arbeiten, die zu keinem Thema des Inhaltsverzeichnisses passen
+
+
+def _search_topics(proj: dict) -> list[tuple[str, dict]]:
+    return [(tid, t) for tid, t in proj["topics"].items()
+            if t.get("enabled", True) and not t.get("varia") and not t.get("safety")]
+
+
+def run_search_plan(llm: LLM, proj: dict, log, force: bool = False) -> None:
+    """Schritt 1a (günstig): Kapitel analysieren (Gliederung, Anker, englische Titel, nicht suchbare
+    Überschriften), je Thema den Suchplan erstellen und die Trefferzahlen in PubMed zählen. Bewertet wird
+    noch nichts; die Autorin kann die Suchen vorher prüfen und ändern."""
+    chapter = (proj["toc"] or {}).get("chapter_title", "")
+    rules = proj.get("rules") or {}
+    von, bis = recommend.search_window(rules, proj.get("search_window"))
+    topics = _search_topics(proj)
+    if force or not proj.get("search_frame"):
+        log("Kapitel wird analysiert (Gliederung, Suchanker)…")
+        proj["search_frame"] = recommend.analyze_chapter(llm, chapter, [t for _, t in topics])
+    frame = proj["search_frame"]
+    for tid, t in topics:
+        ft = frame["topics"].get(tid, {})
+        t["title_en"] = t.get("title_en") or ft.get("title_en", "")
+        if force or "searchable" not in t:  # „trotzdem suchen“ der Autorin bleibt erhalten
+            t["searchable"] = ft.get("searchable", True) is not False
+    todo = [(tid, t) for tid, t in topics if t["searchable"]
+            and (force or not (t.get("plan") or {}).get("queries"))]
+
+    def work(t):
+        plan = recommend.plan_search(llm, t, chapter, von, bis, frame)
+        plan["queries"] = [q for q in plan.get("queries", []) if (q.get("query") or "").strip()]
+        return plan
+
+    for tid, res in _parallel(todo, work, log, "Suchplan").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Suchplan {proj['topics'][tid]['title']}", res)
+            continue
+        t = proj["topics"][tid]
+        t["plan"] = res
+        t["plan_rev"] = t.get("plan_rev", 0) + 1
+    recount_plan(proj, log)
+
+
+def recount_plan(proj: dict, log=lambda m: None) -> None:
+    """Trefferzahlen der (ggf. bearbeiteten) Suchen neu zählen – nur PubMed, keine KI-Kosten."""
+    rules = proj.get("rules") or {}
+    von, bis = recommend.search_window(rules, proj.get("search_window"))
+    log("Treffer in PubMed werden gezählt…")
+    for tid, t in _search_topics(proj):
+        if t.get("plan") is not None:
+            t["plan_counts"] = recommend.count_queries(
+                recommend.with_manual(t["plan"], t.get("manual_query", ""))["queries"], von, bis, proj["email"])
+    frame = proj.get("search_frame")
+    if frame:
+        frame["counts"] = recommend.count_queries(recommend.safety_queries(frame), von, bis, proj["email"])
+    proj["plan_window"] = [von.isoformat(), bis.isoformat()]
+
+
 def run_recommendations(llm: LLM, proj: dict, log) -> None:
     apply_manual_limits(proj)
     proj["check_ok"] = False  # neue Auswahl: Themenzuordnung in Schritt 2 erneut prüfen
@@ -195,21 +253,44 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
     rules = proj.get("rules") or {}
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
     window = proj.get("search_window")  # manuell eingestellt; bei Änderung werden die Themen neu gesucht
-    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and not t.get("varia")
-            and ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window))]
+    frame = proj.get("search_frame")
+    for tid, t in _search_topics(proj):
+        if t.get("searchable") is False and "recommended" not in t:
+            # nicht suchbare Überschrift (z.B. „Kuriosa“): wird über das Sicherheitsnetz abgedeckt
+            t.update({"recommended": [], "reserve": [], "ranking": {}, "n_candidates": 0, "query_hits": {},
+                      "window": list(proj.get("plan_window") or ["", ""]), "plan": {"queries": []}})
+    todo = [(tid, t) for tid, t in _search_topics(proj) if t.get("searchable") is not False
+            and ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
+                 or t.get("plan_rev", 0) != t.get("ranked_rev", 0))]
 
     def work(t):
-        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window)
+        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window,
+                                             plan=t.get("plan"), frame=frame)
 
     for tid, res in _parallel(todo, work, log, "Literaturempfehlung").items():
         if isinstance(res, Exception):
             _err(proj, f"Literaturempfehlung {proj['topics'][tid]['title']}", res)
             proj["topics"][tid]["rec_error"] = f"{type(res).__name__}: {res}"
             continue
-        proj["topics"][tid].pop("rec_error", None)
-        proj["topics"][tid].pop("selected", None)  # alte Auswahl passt nicht zur neuen Trefferliste
+        t = proj["topics"][tid]
+        t.pop("rec_error", None)
+        t.pop("selected", None)  # alte Auswahl passt nicht zur neuen Trefferliste
         proj["records"].update(res.pop("records"))
-        proj["topics"][tid].update(res)
+        manual = t.get("manual_query", "")
+        if t.get("plan") is None:  # ohne vorherigen Suchplan (Ein-Schritt-Ablauf): KI-Plan merken
+            res["plan"] = {**res["plan"], "queries": [q for q in res["plan"].get("queries", [])
+                                                      if q.get("name") != "eigene"]}
+        else:
+            res.pop("plan", None)  # den (ggf. bearbeiteten) Suchplan nicht überschreiben
+        t.update(res)
+        t["manual_query"] = manual
+        t["ranked_rev"] = t.get("plan_rev", 0)
+    try:
+        run_safety_net(llm, proj, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Sicherheitsnetz", ex)
 
     # Open-Access-Status der empfohlenen Arbeiten
     for t in proj["topics"].values():
@@ -219,6 +300,86 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
                 info = unpaywall(rec.get("doi", ""), proj["email"])
                 rec["is_oa"] = bool(info.get("is_oa"))
     fit_to_length(proj, log)
+
+
+SAFETY_MAX_CANDIDATES = 60
+
+
+def run_safety_net(llm: LLM, proj: dict, log) -> None:
+    """Kapitelweite Suchen (hohe Evidenz, Top-Journale, Anker allein). Neue Treffer, die in keiner Themensuche
+    vorkamen, werden für das ganze Kapitel bewertet. Arbeiten der Priorität A werden dem passenden Thema
+    zugeordnet; passen sie zu keinem, landen sie unter „Neue Themen außerhalb des Inhaltsverzeichnisses“
+    (zunächst nicht im Manuskript, die Autorin entscheidet)."""
+    frame = proj.get("search_frame")
+    queries = recommend.safety_queries(frame or {})
+    if not queries:
+        return
+    rules = proj.get("rules") or {}
+    von, bis = recommend.search_window(rules, proj.get("search_window"))
+    topics = _search_topics(proj)
+    key = json.dumps([[q["query"] for q in queries], von.isoformat(), bis.isoformat(), sorted(tid for tid, _ in topics)])
+    net = proj.get("safety_net") or {}
+    if net.get("key") != key:
+        known = set()
+        for tid, t in proj["topics"].items():
+            if tid != SAFETY:
+                known.update(p for p, it in t.get("ranking", {}).items() if it.get("via") != "Sicherheitsnetz")
+        log("Sicherheitsnetz: kapitelweite Suche nach weiteren wichtigen Arbeiten…")
+        pmids, stats = recommend.collect_candidates({"queries": queries}, von, bis, proj["email"],
+                                                    limit=SAFETY_MAX_CANDIDATES * 3)
+        new = [p for p in pmids if p not in known][:SAFETY_MAX_CANDIDATES]
+        records = pubmed.fetch_records(new, proj["email"]) if new else {}
+        cands = recommend.prefilter([records[p] for p in new if p in records])
+        chapter = (proj["toc"] or {}).get("chapter_title", "")
+        pico = "Alle Themen des Kapitels: " + "; ".join(recommend.topic_path(t) for _, t in topics)
+        ranking = recommend.rank(llm, {"title": f"{chapter} (gesamtes Kapitel)"}, pico, cands,
+                                 f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}") if cands else {}
+        recommend.select(ranking, 10 ** 6)  # berechnet Priorität und Längenwert
+        top = [p for p, it in ranking.items() if it.get("priority") == "A"]
+        assign = {}
+        if top:
+            topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
+            pubs_block = "\n".join(f"{p}: {records[p]['title']} – "
+                                   f"{' '.join(records[p].get('abstract', '').split())[:500]}" for p in top)
+            data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, max_tokens=4000,
+                            effort="low")
+            valid = {tid for tid, _ in topics}
+            assign = {a["key"]: a["topic_id"] for a in data.get("assignments", []) if a.get("topic_id") in valid}
+        proj["records"].update({p: records[p] for p in top if p in records})
+        net = {"key": key, "hits": stats, "n_new": len(cands), "window": [von.isoformat(), bis.isoformat()],
+               "items": {p: {"topic": assign.get(p, ""), "item": {**ranking[p], "via": "Sicherheitsnetz"}} for p in top}}
+        proj["safety_net"] = net
+    # Zuordnung anwenden (auch nach einer erneuten Themensuche, ohne neue Kosten)
+    n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
+    valid = {tid for tid, _ in topics}
+    orphans = []
+    for p, e in net.get("items", {}).items():
+        tid = e["topic"]
+        if tid not in valid:
+            orphans.append(p)
+            continue
+        t = proj["topics"][tid]
+        if p not in t.setdefault("ranking", {}):
+            t["ranking"][p] = e["item"]
+            t["recommended"], t["reserve"] = recommend.select(t["ranking"], n)
+    if orphans:
+        sf = proj["topics"].setdefault(SAFETY, {
+            "id": SAFETY, "title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "number": "",
+            "english_search_focus": "", "section_number": "Neue Themen",
+            "section_title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "enabled": False, "safety": True,
+            "guidelines": []})
+        if set(sf.get("ranking", {})) != set(orphans):
+            sf.pop("selected", None)
+        sf["ranking"] = {p: net["items"][p]["item"] for p in orphans}
+        sf["recommended"] = sorted(orphans, key=lambda p: -sf["ranking"][p].get("length_score", 0))
+        sf["reserve"] = []
+        sf.update({"window": net.get("window", ["", ""]), "n_candidates": net.get("n_new", 0),
+                   "query_hits": net.get("hits", {}), "plan": {"queries": queries}})
+    else:
+        proj["topics"].pop(SAFETY, None)
+    net["assigned"], net["orphans"] = len(net.get("items", {})) - len(orphans), len(orphans)
+    log(f"Sicherheitsnetz: {net.get('n_new', 0)} weitere Arbeiten bewertet, {net['assigned']} einem Thema "
+        f"zugeordnet, {len(orphans)} als mögliches neues Thema.")
 
 
 def _enabled_topics(proj: dict) -> list[str]:
@@ -266,7 +427,8 @@ def fit_to_length(proj: dict, log=lambda m: None) -> None:
 
 def run_guideline_search(llm: LLM, proj: dict, log) -> None:
     chapter = (proj["toc"] or {}).get("chapter_title", "")
-    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and "guidelines" not in t]
+    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and "guidelines" not in t
+            and not t.get("safety")]
 
     def work(t):
         found = G.search_guidelines(llm, t["title"], chapter)

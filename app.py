@@ -239,7 +239,11 @@ with st.form("step1"):
         bis_m = w1.selectbox("Monat bis", _months, index=_bis.month - 1, label_visibility="collapsed")
         bis_y = w2.selectbox("Jahr bis", _years, index=_years.index(_bis.year) if _bis.year in _years else 0,
                              label_visibility="collapsed")
-    go1 = b_go.form_submit_button("🔍 Literaturempfehlung und Leitlinienrecherche starten")
+    review_plan = b_go.checkbox("Suchbegriffe vor der Bewertung prüfen (empfohlen)", value=proj.get("review_plan", True),
+                                help="Die App erstellt zuerst je Thema die englischen PubMed-Suchen und zählt die Treffer "
+                                     "(wenige Cent je Thema). Sie können die Suchen prüfen, ändern und eigene "
+                                     "Suchbegriffe ergänzen. Erst danach werden die Arbeiten bewertet.")
+    go1 = b_go.form_submit_button("🔍 Literatursuche starten" + (" (zuerst Suchplan)" if proj.get("review_plan", True) else ""))
 
 if proj.get("search_window"):
     _w = [date.fromisoformat(x) for x in proj["search_window"]]
@@ -264,8 +268,13 @@ if go1:
         guide_text = extract_text(guide_file.name, guide_file.read()) if guide_file else ""
         template = (template_file.name, template_file.read()) if template_file else None
 
+        proj["review_plan"] = bool(review_plan)
+
         def step1(log):
             pipeline.run_intake(llm, proj, toc_text, guide_text, template, log)
+            pipeline.run_search_plan(llm, proj, log)
+            if proj["review_plan"]:
+                return  # Suchplan anzeigen; die Bewertung startet die Autorin danach selbst
             pipeline.run_recommendations(llm, proj, log)
             pipeline.run_guideline_search(llm, proj, log)
             pipeline.run_guideline_needs(llm, proj, log)
@@ -318,6 +327,80 @@ if proj.get("toc"):
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")
+
+    _frame = proj.get("search_frame")
+    _stopics = [(tid, t) for tid, t in proj["topics"].items()
+                if t.get("enabled", True) and not t.get("varia") and not t.get("safety")]
+    if _frame:
+        _pending = [tid for tid, t in _stopics if t.get("searchable") is not False
+                    and ("recommended" not in t or t.get("plan_rev", 0) != t.get("ranked_rev", 0))]
+        with st.expander(f"🔎 Suchplan prüfen – {len(_stopics)} Themen"
+                         + (f", {len(_pending)} noch nicht bewertet" if _pending else ""), expanded=bool(_pending)):
+            _st = {"methode": "nach einer Methode", "krankheit": "nach einer Erkrankung", "gemischt": "gemischt"}
+            st.markdown(f"**Kapitel:** {_frame.get('chapter_en', '')} · gegliedert "
+                        f"{_st.get(_frame.get('structure'), '?')}. {_frame.get('structure_note', '')}")
+            _anchor = st.text_area("Kapitel-Anker (gemeinsamer Suchbegriff, in den Themensuchen bereits enthalten; "
+                                   "wird für das Sicherheitsnetz verwendet)", value=_frame.get("anchor_query", ""),
+                                   height=80, disabled=_running, key="plan_anchor")
+            if _anchor != _frame.get("anchor_query", ""):
+                _frame["anchor_query"] = _anchor
+            _fc = _frame.get("counts") or {}
+            st.caption("Sicherheitsnetz (kapitelweit, findet auch Themen außerhalb des Inhaltsverzeichnisses): "
+                       f"hohe Evidenz {_fc.get('netz_evidenz', '?')} · Top-Journale {_fc.get('netz_journale', '?')} · "
+                       f"Anker allein {_fc.get('netz_anker', '?')} Treffer"
+                       + (f" · Zeitraum {proj['plan_window'][0]} bis {proj['plan_window'][1]}" if proj.get("plan_window") else ""))
+            _names = {"praezise": "präzise", "breit": "breit", "hohe_evidenz": "hohe Evidenz", "eigene": "eigene"}
+            for tid, t in _stopics:
+                _head = f"{t.get('number', '')} {t['title']}".strip()
+                if t.get("searchable") is False:
+                    st.markdown(f"**{_head}** – keine eigene Suche (Überschrift nicht recherchierbar, wird über das "
+                                "Sicherheitsnetz abgedeckt)")
+                    if st.checkbox("trotzdem eigene Suche anlegen", key=f"forcesearch_{tid}", disabled=_running):
+                        t["searchable"] = True
+                        t.pop("recommended", None)
+                    continue
+                _cnt = t.get("plan_counts") or {}
+                _hits = " / ".join(str(_cnt.get(q["name"], "?")) for q in (t.get("plan") or {}).get("queries", []))
+                with st.popover(f"{_head} · {_hits or 'noch kein Suchplan'} Treffer", use_container_width=True):
+                    st.caption(f"Englisch: {t.get('title_en', '')}")
+                    for i, q in enumerate((t.get("plan") or {}).get("queries", [])):
+                        _new = st.text_area(f"{_names.get(q['name'], q['name'])} · {_cnt.get(q['name'], '?')} Treffer",
+                                            value=q["query"], height=90, disabled=_running,
+                                            key=f"q_{tid}_{i}_{t.get('plan_rev', 0)}")
+                        if _new != q["query"]:
+                            q["query"] = _new
+                            t["plan_rev"] = t.get("plan_rev", 0) + 1
+                    _man = st.text_input(f"Eigene Suchbegriffe (zusätzlich) · {_cnt.get('eigene', '–')} Treffer",
+                                         value=t.get("manual_query", ""), disabled=_running, key=f"man_{tid}",
+                                         help="Wird zusätzlich zu den KI-Suchen in PubMed gesucht, z.B. "
+                                              "„EVAR AND sac embolization“ oder ein Studienname.")
+                    if _man != t.get("manual_query", ""):
+                        t["manual_query"] = _man
+                        t["plan_rev"] = t.get("plan_rev", 0) + 1
+            p1, p2 = st.columns(2)
+            if p1.button("🔢 Treffer neu zählen", disabled=_running, key="plan_recount"):
+                _plm = get_llm()
+                if _plm:
+                    run_with_status("Suchplan wird aktualisiert",
+                                    lambda log: pipeline.run_search_plan(_plm, proj, log), _plm)
+            _n = max(len(_pending), 1)
+            if p2.button(f"✅ Literatur bewerten und Leitlinien recherchieren (ca. {0.4 * _n:.{0 if _n >= 10 else 1}f}–{0.8 * _n:.{0 if _n >= 10 else 1}f} USD)",
+                         disabled=_running or not _pending, key="plan_go", type="primary"):
+                _plm = get_llm()
+                if _plm:
+                    def _rank_all(log):
+                        pipeline.run_search_plan(_plm, proj, log)
+                        pipeline.run_recommendations(_plm, proj, log)
+                        pipeline.run_guideline_search(_plm, proj, log)
+                        pipeline.run_guideline_needs(_plm, proj, log)
+                    run_with_status("Literatur wird bewertet", _rank_all, _plm)
+            st.caption("Die Kosten sind eine Schätzung (Bewertung der Treffer und Leitlinienrecherche je Thema). "
+                       "Geänderte Suchen werden beim nächsten Bewerten neu ausgeführt, unveränderte Themen nicht.")
+        _net = proj.get("safety_net")
+        if _net:
+            st.caption(f"🛟 Sicherheitsnetz: {_net.get('n_new', 0)} zusätzliche Arbeiten bewertet, "
+                       f"{_net.get('assigned', 0)} einem Thema zugeordnet, {_net.get('orphans', 0)} als mögliches "
+                       "neues Thema (ganz unten, zunächst nicht im Manuskript).")
 
     lp = proj.get("length_plan") or {}
     plan_tiers = lp.get("tiers", {})
@@ -375,6 +458,8 @@ if proj.get("toc"):
                          f"{it.get('study_design', '')} · [PubMed](https://pubmed.ncbi.nlm.nih.gov/{pmid}/)"
                          + (f" · [DOI](https://doi.org/{rec['doi']})" if rec.get("doi") else "")
                          + f"  \n_{it.get('rationale', '')}_")
+                if it.get("via"):
+                    label += "  \n🛟 über das Sicherheitsnetz gefunden"
                 if pmid in limit_dropped:
                     label += f"  \n✂️ wegen der Vorgaben entfernt ({limit_dropped[pmid]})"
                 elsewhere = moved_to.get(pmid)

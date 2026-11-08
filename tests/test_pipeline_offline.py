@@ -827,6 +827,88 @@ def test_guideline_needs():
     assert S._sheet_guidelines({"guidelines": [{"title": "A"}]})[0]["need"] == ""  # altes Projekt
 
 
+def test_search_plan_and_safety_net():
+    """Suchplan mit Kapitelanker (Krankheit statt pauschal „surgery“), nicht suchbare Überschrift, eigene
+    Suchbegriffe, Bearbeiten nur der geänderten Themen und Sicherheitsnetz für neue Themen."""
+    from medupdate import recommend as R
+    calls = {"plan": 0, "rank": [], "searches": []}
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema["properties"]
+            if "anchor_query" in props:
+                assert "Kuriosa" in prompt and "Nachsorge › Compliance" in prompt
+                return {"chapter_en": "Abdominal aortic disease", "structure": "krankheit", "structure_note": "x",
+                        "anchor_query": 'AAA[tiab]', "journals": ["J Vasc Surg"],
+                        "topics": [{"id": "T1", "title_en": "EVAR planning", "searchable": True,
+                                    "aspect_query": "EVAR[tiab]", "note": ""},
+                                   {"id": "T2", "title_en": "adherence to surveillance", "searchable": True,
+                                    "aspect_query": "", "note": ""},
+                                   {"id": "T3", "title_en": "", "searchable": False, "aspect_query": "", "note": ""}]}
+            if "queries" in props:
+                if "SENSITIVERE" not in prompt:  # Erweiterung bei wenigen Treffern ist kein neuer Suchplan
+                    calls["plan"] += 1
+                    assert "Kapitel-Anker (PubMed): AAA[tiab]" in prompt and "Gliederungspfad" in prompt
+                return {"pico": "P", "queries": [{"name": "praezise", "query": "AAA[tiab] AND x"},
+                                                 {"name": "breit", "query": "AAA[tiab]"}], "exclusion": ""}
+            if "items" in props:
+                ids = re.findall(r"PMID: (\d+)", prompt)
+                calls["rank"].append(ids)
+                return {"items": [{"pmid": i, "study_design": "RCT", "relevance": 90, "evidence": 85,
+                                   "risk_of_bias": "Low", "novelty": 80, "practice_impact": 85,
+                                   "question_importance": 80, "journal_impact_factor": 10.0,
+                                   "question_key": f"k{i}", "is_primary_research": True, "rationale": "r"}
+                                  for i in ids]}
+            if "assignments" in props:
+                return {"assignments": [{"key": "900", "topic_id": "T2"}, {"key": "901", "topic_id": ""}]}
+            raise AssertionError(list(props))
+
+    def fake_search(q, retmax, email=""):
+        calls["searches"].append(q)
+        assert "[Date - Entrez]" in q
+        if "netz_" in q:
+            pass
+        ids = ["900", "901"] if q.startswith("((AAA[tiab]) AND (randomized") else ["100", "101"]
+        if "eigene" in q or "sac embolization" in q:
+            ids = ["102"]
+        return (ids[:retmax] if retmax else []), 42
+
+    orig = (pubmed.search, pubmed.fetch_records)
+    pubmed.search = fake_search
+    pubmed.fetch_records = lambda ids, email="": {i: _rec(i) for i in ids}
+    try:
+        proj = pipeline.new_project()
+        proj["email"] = "x@y.z"
+        proj["toc"] = {"chapter_title": "Abdominelle Aortenerkrankungen"}
+        proj["topics"] = {
+            "T1": {"id": "T1", "title": "EVAR-Planung", "section_title": "Versorgung"},
+            "T2": {"id": "T2", "title": "Compliance", "section_title": "Nachsorge"},
+            "T3": {"id": "T3", "title": "Kuriosa", "section_title": "Diverses"}}
+        pipeline.run_search_plan(L(), proj, lambda *a: None)
+        assert calls["plan"] == 2 and proj["topics"]["T3"]["searchable"] is False
+        assert proj["topics"]["T1"]["plan_counts"] == {"praezise": 42, "breit": 42}
+        assert proj["search_frame"]["counts"]["netz_journale"] == 42
+        assert '"J Vasc Surg"[ta]' in R.safety_queries(proj["search_frame"])[1]["query"]
+        proj["topics"]["T1"]["manual_query"] = "sac embolization"
+        pipeline.run_recommendations(L(), proj, lambda *a: None)
+        t1, t2 = proj["topics"]["T1"], proj["topics"]["T2"]
+        assert "102" in t1["ranking"] and t1["manual_query"] == "sac embolization"
+        assert [q["name"] for q in t1["plan"]["queries"]] == ["praezise", "breit"]  # eigene bleibt separat
+        assert proj["topics"]["T3"]["recommended"] == []
+        assert t2["ranking"]["900"]["via"] == "Sicherheitsnetz" and "900" in t2["recommended"]
+        neu = proj["topics"][pipeline.SAFETY]
+        assert neu["recommended"] == ["901"] and neu["enabled"] is False
+        n_rank = len(calls["rank"])
+        # Nur das geänderte Thema wird neu bewertet; das Sicherheitsnetz läuft nicht noch einmal
+        t2["plan"]["queries"][0]["query"] = "AAA[tiab] AND adherence"
+        t2["plan_rev"] += 1
+        pipeline.run_recommendations(L(), proj, lambda *a: None)
+        assert len(calls["rank"]) == n_rank + 1
+        assert "900" in proj["topics"]["T2"]["ranking"]  # Zuordnung aus dem Sicherheitsnetz bleibt erhalten
+    finally:
+        pubmed.search, pubmed.fetch_records = orig
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_direct_upload()
@@ -846,6 +928,7 @@ if __name__ == "__main__":
     test_transition_slots()
     test_selection_package()
     test_guideline_needs()
+    test_search_plan_and_safety_net()
     test_sota_trailing_note()
     test_full_pipeline()
     test_comment_box()

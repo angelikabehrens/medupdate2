@@ -52,7 +52,62 @@ Hinweise für Autoren:
 {guide_text}"""
 
 
-def search_plan_prompt(topic: str, focus: str, chapter: str, von: str, bis: str) -> str:
+def chapter_frame_prompt(chapter: str, topics_block: str) -> str:
+    return f"""Du bist Informationsspezialist für medizinische Literaturrecherche (PubMed/MEDLINE). Für ein \
+ärztliches Fortbildungshandbuch wird zu jedem Thema des folgenden Inhaltsverzeichnisses eine PubMed-Suche \
+durchgeführt. Bevor die einzelnen Suchen geplant werden, analysierst du das Kapitel als Ganzes.
+
+Kapitel: {chapter or "(nicht angegeben)"}
+Themen (ID: Nummer Gliederungspfad):
+{topics_block}
+
+Aufgaben:
+1. "chapter_en": Kapiteltitel auf Englisch.
+2. "structure": Wonach ist das Kapitel gegliedert?
+   - "methode": Alle Themen behandeln dieselbe Methode/dasselbe Verfahren (z.B. „Endoskopie oberer \
+Gastrointestinaltrakt“: jede Suche braucht den Aspekt Endoskopie).
+   - "krankheit": Alle Themen behandeln dieselbe Erkrankung/dasselbe Organ, aber unterschiedliche Aspekte \
+(z.B. „Abdominelle Aortenerkrankungen“: Screening, Medikamente, Chirurgie, Nachsorge). Dann darf ein \
+Verfahrensbegriff wie „surgery“ NICHT pauschal in jede Suche, sonst gehen Screening-, Medikamenten- und \
+Nachsorgestudien verloren.
+   - "gemischt": weder noch eindeutig.
+   "structure_note": ein deutscher Satz zur Begründung.
+3. "anchor_query": der gemeinsame Kernbegriff des Kapitels als PubMed-Suchstring, der mit AND an jede \
+Themensuche gehängt werden kann: bei "methode" die Methode, bei "krankheit" die Erkrankung/das Organ, bei \
+"gemischt" der breiteste gemeinsame Nenner. Immer MeSH ([Mesh]) UND Freitext ([tiab]) mit Synonymen und \
+Abkürzungen ODER-verknüpft, weil die neuesten Arbeiten oft noch nicht verschlagwortet sind. Nur MeSH-Begriffe, \
+die es tatsächlich gibt. Keine Datums- oder Sprachfilter.
+4. "journals": 6–10 führende Fachzeitschriften des Gebiets als PubMed-Journal-Abkürzung (z.B. \
+"J Vasc Surg", "Eur J Vasc Endovasc Surg", "Gastrointest Endosc"). Die großen allgemeinen Journale (NEJM, \
+Lancet, JAMA, BMJ) ergänzt die App selbst.
+5. Für JEDES Thema ein Eintrag in "topics" mit seiner ID:
+   - "title_en": englischer Titel, aus dem Gliederungspfad verständlich (z.B. „Compliance“ unter \
+„Nachsorge“ → "patient adherence to surveillance after EVAR").
+   - "searchable": false, wenn die Überschrift kein recherchierbares Thema ist (z.B. „Kuriosa“, \
+„Diverses“, „Verschiedenes“, „Hot Topics“, „State of the Art“, „Zusammenfassung“). Solche Themen werden über \
+eine kapitelweite Suche abgedeckt. Sonst true.
+   - "aspect_query": nur wenn das Thema einen bestimmten Verfahrens- oder Therapieaspekt hat, der nicht \
+schon im Anker steckt (z.B. bei einem Krankheitskapitel das Thema „Offene Reparatur“ → Chirurgie-Begriffe, \
+„EVAR-Planung“ → EVAR-Begriffe): ein kurzer PubMed-Teilstring mit Synonymen; sonst leer.
+   - "note": optional ein kurzer deutscher Hinweis (z.B. warum nicht suchbar)."""
+
+
+def search_plan_prompt(topic: str, focus: str, chapter: str, von: str, bis: str, path: str = "",
+                       title_en: str = "", anchor: str = "", aspect: str = "", structure: str = "") -> str:
+    frame = ""
+    if anchor:
+        frame = f"""
+Gliederungspfad im Kapitel: {path or topic}
+Englischer Thementitel: {title_en or focus}
+Gliederung des Kapitels: {structure or "unbekannt"}
+Kapitel-Anker (PubMed): {anchor}
+Thema-Aspekt (PubMed, optional): {aspect or "(keiner)"}
+
+Verknüpfe in "praezise" und "hohe_evidenz" den Anker mit AND mit dem thementypischen Konzept (und, falls \
+angegeben, dem Aspekt). Der Anker darf nur weggelassen werden, wenn das Thema ihn schon eindeutig enthält. \
+Lies das Thema IMMER im Zusammenhang des Gliederungspfads: Eine knappe Überschrift wie „Compliance“ unter \
+„Nachsorge“ meint die Nachsorge der Kapitelerkrankung.
+"""
     return f"""Du bist Informationsspezialist für medizinische Literaturrecherche (PubMed/MEDLINE) und \
 bereitest die Literaturauswahl für ein ärztliches Fortbildungshandbuch vor. Gesucht werden NEUE, \
 klinisch relevante Originalarbeiten und hochwertige Übersichtsarbeiten, die seit {von} erschienen sind.
@@ -60,7 +115,7 @@ klinisch relevante Originalarbeiten und hochwertige Übersichtsarbeiten, die sei
 Kapitel: {chapter or "(nicht angegeben)"}
 Thema: {topic}
 Fachlicher Suchfokus (englisch): {focus}
-
+{frame}
 Aufgabe:
 1. Leite eine PICO-Struktur (Population, Intervention/Exposition, Vergleich, Endpunkte) für das Thema ab. \
 Ist das Thema breit (z.B. eine ganze Erkrankung), beschreibe die klinisch wichtigsten Fragestellungen.
@@ -76,7 +131,9 @@ Varices"[Mesh]). Verwende nur MeSH-Begriffe, die es tatsächlich gibt; im Zweife
 Klammern. KEINE Datumsangaben und KEINE Sprachfilter in die Suchstrings schreiben – das ergänzt die App.
 4. Nenne Ausschlusskriterien (z.B. Tierstudien, pädiatrische Population, wenn nicht gemeint).
 
-Hinweise: Bevorzuge Begriffe, wie sie in Titeln und Abstracts aktueller klinischer Studien vorkommen. \
+Hinweise: Die neuesten Arbeiten sind oft noch nicht mit MeSH verschlagwortet: jedes Konzept daher IMMER \
+auch als Freitext ([tiab]) mit Synonymen und Abkürzungen suchen, nie nur MeSH. \
+Bevorzuge Begriffe, wie sie in Titeln und Abstracts aktueller klinischer Studien vorkommen. \
 Vermeide zu viele AND-Verknüpfungen, die die Trefferzahl auf null drücken: höchstens zwei bis drei \
 Konzepte mit AND verknüpfen; "breit" am besten nur das Kernkonzept mit allen Synonymen."""
 

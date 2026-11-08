@@ -35,7 +35,10 @@ def _params(email: str, **extra) -> dict:
 
 
 def date_filter(von: date, bis: date) -> str:
-    return f'("{von.strftime("%Y/%m/%d")}"[Date - Publication] : "{bis.strftime("%Y/%m/%d")}"[Date - Publication])'
+    """Publikationsdatum ODER Eingangsdatum in PubMed: so werden auch Online-first-Arbeiten gefunden, deren
+    Heftdatum erst später liegt."""
+    v, b = von.strftime("%Y/%m/%d"), bis.strftime("%Y/%m/%d")
+    return f'(("{v}"[Date - Publication] : "{b}"[Date - Publication]) OR ("{v}"[Date - Entrez] : "{b}"[Date - Entrez]))'
 
 
 def search(query: str, retmax: int, email: str = "") -> tuple[list[str], int]:
