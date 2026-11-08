@@ -17,7 +17,7 @@ from datetime import date, datetime, timezone
 
 from . import appraisal as A
 from . import guidelines as G
-from . import intake, pubmed, recommend
+from . import intake, prior, pubmed, recommend
 from . import prompts_new as P
 from .citations import (
     dedupe_local_literature,
@@ -285,12 +285,14 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
         t.update(res)
         t["manual_query"] = manual
         t["ranked_rev"] = t.get("plan_rev", 0)
+    apply_prior(proj, log)
     try:
         run_safety_net(llm, proj, log)
     except AccountError:
         raise
     except Exception as ex:
         _err(proj, "Sicherheitsnetz", ex)
+    apply_prior(proj, log)
 
     # Open-Access-Status der empfohlenen Arbeiten
     for t in proj["topics"].values():
@@ -303,6 +305,45 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
 
 
 SAFETY_MAX_CANDIDATES = 60
+
+
+def apply_prior(proj: dict, log=lambda m: None) -> int:
+    """Arbeiten aus dem Vorjahresmanuskript (proj["prior"]) aus Empfehlung, Reserve und Auswahl nehmen und
+    die Lücke aus der Rangliste auffüllen (ohne KI). Ausgeschlossene Arbeiten werden je Thema unter
+    t["prior_excluded"] gemerkt; ohne Vorjahresmanuskript (oder nach dem Entfernen) kommen sie zurück.
+    Gibt die Zahl der ausgeschlossenen Arbeiten zurück."""
+    pr = proj.get("prior")
+    rules = proj.get("rules") or {}
+    n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
+    total = set()
+    for tid, t in proj["topics"].items():
+        if "ranking" not in t:
+            continue
+        ex = t.setdefault("prior_excluded", {})
+        changed = False
+        for p in list(ex):  # zurückholen, was nicht mehr passt (z.B. Vorjahresmanuskript entfernt)
+            if not prior.match(proj["records"].get(p, {}), pr):
+                t["ranking"][p] = ex.pop(p)["item"]
+                changed = True
+        for p in list(t["ranking"]):
+            why = prior.match(proj["records"].get(p, {}), pr)
+            if why:
+                ex[p] = {"item": t["ranking"].pop(p), "why": why}
+                for k in ("recommended", "reserve", "selected"):
+                    if p in t.get(k, []):
+                        t[k] = [x for x in t[k] if x != p]
+                changed = True
+        if changed:
+            if t.get("safety"):
+                t["recommended"] = sorted(t["ranking"], key=lambda p: -t["ranking"][p].get("length_score", 0))
+            else:
+                t["recommended"], t["reserve"] = recommend.select(t["ranking"], n)
+        if not ex:
+            t.pop("prior_excluded", None)
+        total.update(ex)
+    if pr:
+        log(f"Vorjahresmanuskript: {len(total)} bereits gewürdigte oder zitierte Arbeiten ausgeschlossen.")
+    return len(total)
 
 
 def run_safety_net(llm: LLM, proj: dict, log) -> None:
@@ -324,12 +365,14 @@ def run_safety_net(llm: LLM, proj: dict, log) -> None:
         for tid, t in proj["topics"].items():
             if tid != SAFETY:
                 known.update(p for p, it in t.get("ranking", {}).items() if it.get("via") != "Sicherheitsnetz")
+                known.update(t.get("prior_excluded", {}))
         log("Sicherheitsnetz: kapitelweite Suche nach weiteren wichtigen Arbeiten…")
         pmids, stats = recommend.collect_candidates({"queries": queries}, von, bis, proj["email"],
                                                     limit=SAFETY_MAX_CANDIDATES * 3)
         new = [p for p in pmids if p not in known][:SAFETY_MAX_CANDIDATES]
         records = pubmed.fetch_records(new, proj["email"]) if new else {}
-        cands = recommend.prefilter([records[p] for p in new if p in records])
+        cands = recommend.prefilter([records[p] for p in new if p in records
+                                     and not prior.match(records[p], proj.get("prior"))])
         chapter = (proj["toc"] or {}).get("chapter_title", "")
         pico = "Alle Themen des Kapitels: " + "; ".join(recommend.topic_path(t) for _, t in topics)
         ranking = recommend.rank(llm, {"title": f"{chapter} (gesamtes Kapitel)"}, pico, cands,

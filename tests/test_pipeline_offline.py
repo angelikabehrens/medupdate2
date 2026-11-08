@@ -905,6 +905,23 @@ def test_search_plan_and_safety_net():
         pipeline.run_recommendations(L(), proj, lambda *a: None)
         assert len(calls["rank"]) == n_rank + 1
         assert "900" in proj["topics"]["T2"]["ranking"]  # Zuordnung aus dem Sicherheitsnetz bleibt erhalten
+        # Vorjahresmanuskript: Titel mit Silbentrennung aus dem PDF und DOI werden erkannt
+        from medupdate import prior
+        proj["prior"] = prior.build_prior({"Vorjahr.pdf": "1. Smith J et al. Trial num-\nber 100 of something "
+                                                          "important. N Engl J Med 2025.\n2. Doe A. Other. "
+                                                          "doi:10.1056/X900."})
+        assert prior.match(_rec("101"), proj["prior"]) == ""
+        assert pipeline.apply_prior(proj) == 2
+        t1, t2 = proj["topics"]["T1"], proj["topics"]["T2"]
+        assert "100" not in t1["ranking"] and "100" not in t1["recommended"] and "101" in t1["recommended"]
+        assert t1["prior_excluded"]["100"]["why"] == "Titel" and t2["prior_excluded"]["900"]["why"] == "DOI"
+        assert "900" not in t2["recommended"]
+        n_rank = len(calls["rank"])
+        pipeline.run_recommendations(L(), proj, lambda *a: None)  # bleibt ausgeschlossen, keine neue Bewertung
+        assert "900" not in proj["topics"]["T2"]["ranking"] and len(calls["rank"]) == n_rank
+        proj.pop("prior")
+        assert pipeline.apply_prior(proj) == 0
+        assert "100" in t1["recommended"] and "900" in t2["recommended"] and "prior_excluded" not in t1
     finally:
         pubmed.search, pubmed.fetch_records = orig
 

@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from medupdate import appraisal as A, pipeline, selection_sheet
+from medupdate import appraisal as A, pipeline, prior, selection_sheet
 from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
@@ -207,6 +207,11 @@ with st.form("step1"):
         template_file = st.file_uploader("Manuskript-Formatvorlage", type=["docx"])
     with c3:
         guide_file = st.file_uploader("Hinweise für Autoren", type=["docx", "pdf", "txt"])
+    prior_files = st.file_uploader(
+        "Vorjahresmanuskript (freiwillig)", type=["docx", "pdf", "txt"], accept_multiple_files=True,
+        help="Arbeiten, die im Vorjahresmanuskript schon gewürdigt oder zitiert wurden, werden nicht erneut "
+             "empfohlen (Abgleich über DOI, PMID und Titel, ohne KI-Kosten). Ohne Upload läuft die Suche wie "
+             "bisher, z. B. bei einem neuen Gesamtthema. Mehrere Dateien sind möglich.")
     _lim = proj.get("manual_limits") or {}
     l1, l2, l3 = st.columns(3)
     lim_pages = l1.number_input("Anzahl Manuskriptseiten (ohne Inhaltsverzeichnis)", min_value=0, max_value=500,
@@ -267,12 +272,17 @@ if go1:
         toc_text = extract_text(toc_file.name, toc_file.read()) if toc_file else ""
         guide_text = extract_text(guide_file.name, guide_file.read()) if guide_file else ""
         template = (template_file.name, template_file.read()) if template_file else None
+        if prior_files:
+            proj["prior"] = prior.build_prior({f.name: extract_text(f.name, f.read()) for f in prior_files})
 
         proj["review_plan"] = bool(review_plan)
 
         def step1(log):
             pipeline.run_intake(llm, proj, toc_text, guide_text, template, log)
             pipeline.run_search_plan(llm, proj, log)
+            if any("ranking" in t for t in proj["topics"].values()):
+                pipeline.apply_prior(proj, log)  # Vorjahresabgleich gilt sofort für bereits bewertete Themen
+                pipeline.fit_to_length(proj, log)
             if proj["review_plan"]:
                 return  # Suchplan anzeigen; die Bewertung startet die Autorin danach selbst
             pipeline.run_recommendations(llm, proj, log)
@@ -324,6 +334,18 @@ if proj.get("toc"):
                    f"Obergrenze {rules.get('max_pages', 0) - 1 if rules.get('max_pages') else '–'} Seiten ohne "
                    f"Inhaltsverzeichnis, {rules.get('max_references') or '–'} Literaturstellen"
                    + (f", höchstens {_ml['publications']} gewürdigte Publikationen." if _ml.get("publications") else "."))
+    if proj.get("prior"):
+        _pr = proj["prior"]
+        _n_ex = len({p for t in proj["topics"].values() for p in t.get("prior_excluded", {})})
+        _pc1, _pc2 = st.columns([4, 1])
+        _pc1.caption(f"📕 Vorjahresmanuskript: {', '.join(_pr.get('names', []))} · "
+                     f"{len(_pr.get('dois', []))} DOI und {len(_pr.get('pmids', []))} PMID erkannt, zusätzlich "
+                     f"Abgleich über den Titel · {_n_ex} bereits enthaltene Arbeit(en) nicht empfohlen.")
+        if _pc2.button("Abgleich entfernen", key="prior_remove", disabled=_running):
+            proj.pop("prior")
+            pipeline.apply_prior(proj)
+            pipeline.fit_to_length(proj)
+            st.rerun()
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")
@@ -435,6 +457,12 @@ if proj.get("toc"):
                 st.warning("Keine Arbeit der Priorität A gefunden. Bei Bedarf eine Arbeit aus der Reserve anhaken.")
             st.caption(f"Zeitraum {t['window'][0]} bis {t['window'][1]} · {t['n_candidates']} Kandidaten bewertet · "
                        f"Treffer je Suchstrategie: {t.get('query_hits')}")
+            if t.get("prior_excluded"):
+                with st.popover(f"📕 {len(t['prior_excluded'])} schon im Vorjahresmanuskript"):
+                    for _p, _e in t["prior_excluded"].items():
+                        _r = proj["records"].get(_p, {})
+                        st.markdown(f"- {_r.get('title', _p)} — {_r.get('journal', '')} {_r.get('year', '')} "
+                                    f"(erkannt über {_e.get('why', '')})")
             with st.popover("🔎 Verwendete PubMed-Suchen"):
                 for a in t.get("attempts") or [{"window": t["window"], "queries": t.get("plan", {}).get("queries", []),
                                                 "hits": t.get("query_hits", {})}]:
