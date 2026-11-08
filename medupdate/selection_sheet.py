@@ -224,12 +224,25 @@ padding:9px 10px;margin:6px 0;background:#fff}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:22px 0}
 .panel h2{font:600 17px Cambria,Georgia,serif;margin:0 0 6px}
 .gl-item{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;margin:4px 0}
+.pick-cur{font-size:13px;color:var(--ink);flex:1 1 200px}
+.picker{position:fixed;inset:0;background:rgba(20,30,25,.45);display:none;z-index:30;align-items:flex-end;justify-content:center}
+.picker.open{display:flex}
+.sheet{background:#fff;width:100%;max-width:640px;max-height:85vh;border-radius:12px 12px 0 0;display:flex;flex-direction:column;box-shadow:0 -4px 20px rgba(0,0,0,.2)}
+.sheet-head{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600}
+.sheet-head .meta{font-weight:400;margin-top:2px;overflow-wrap:anywhere}
+.sheet-list{overflow-y:auto;padding:6px 10px;-webkit-overflow-scrolling:touch}
+.sheet-sec{font:600 14px Cambria,Georgia,serif;color:var(--green);margin:10px 6px 4px}
+.sheet-opt{display:block;width:100%;text-align:left;font:inherit;font-size:15px;line-height:1.35;white-space:normal;overflow-wrap:anywhere;
+background:#fff;border:1px solid var(--line);border-radius:7px;padding:10px 12px;margin:5px 0;cursor:pointer;color:var(--ink)}
+.sheet-opt:hover{background:var(--mist)}.sheet-opt[disabled]{background:var(--mist);color:var(--muted);cursor:default}
+.sheet-foot{padding:10px 16px;border-top:1px solid var(--line);text-align:right}
+@media (min-width:601px){.picker{align-items:center}.sheet{border-radius:12px}}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
 padding:10px 16px;border-radius:8px;display:none;max-width:90vw;z-index:20}
 @media (max-width:600px){header{padding:8px 12px;gap:6px 8px}header h1{font-size:15px;flex-basis:100%}
 .counter{font-size:13px;padding:4px 8px;flex:1 1 100%;text-align:center}header button{padding:6px 10px;font-size:13px;flex:1 1 0}
 main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid-column:1 / -1}
-.row select{max-width:100%}.up input{max-width:100%}.btn.small{padding:6px 12px;font-size:14px}}
+.up input{max-width:100%}.btn.small{padding:6px 12px;font-size:14px}}
 </style>
 </head>
 <body>
@@ -245,7 +258,7 @@ main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid
     <strong>So geht es:</strong>
     <ol>
       <li>Publikationen anhaken, die gewürdigt werden sollen. Oben sehen Sie, wie viele angehakt sind und wie viele seitens med update vorgesehen sind.</li>
-      <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ (und auf dem Handy) die Pfeile oder „Verschieben nach“ verwenden.</li>
+      <li>Reihenfolge ändern: Publikation am Griff <b>⠿</b> ziehen, auch in ein anderes Unterkapitel. Alternativ (und auf dem Handy) die Pfeile oder „Verschieben nach …“ verwenden.</li>
       <li>Das PDF direkt bei der Publikation hochladen. Die Datei wird sofort geprüft (DOI oder Titel und Erstautor).</li>
       <li>Weitere, in der Liste nicht aufgeführte Publikationen beim passenden Unterkapitel ergänzen, Leitlinien ganz unten.</li>
       <li>Wenn Sie die Arbeit unterbrechen, speichern Sie Ihre Auswahl der Publikationen mit den von Ihnen hochgeladenen Dateien unter „Auswahl speichern“. Zum Fortsetzen laden Sie die gespeicherte Datei unter „Gespeichertes Paket öffnen“ hoch und arbeiten dort weiter.</li>
@@ -262,6 +275,13 @@ main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid
     <div id="glList"></div>
   </div>
 </main>
+<div class="picker" id="picker" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <div class="sheet-head"><span id="pickTitle">Verschieben nach</span><div class="meta" id="pickSub"></div></div>
+    <div class="sheet-list" id="pickList"></div>
+    <div class="sheet-foot"><button class="btn small" id="pickCancel">Abbrechen</button></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 <script type="application/json" id="data">__DATA__</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -331,7 +351,21 @@ function updateCounter(){
 }
 
 function topicLabel(tid){ const m = state.topics[tid].meta; return ((m.number || "") + " " + m.title).trim(); }
-function moveOptions(cur){ return state.order.map(t => '<option value="' + esc(t) + '"' + (t === cur ? " selected" : "") + ">" + esc(topicLabel(t)) + "</option>").join(""); }
+// Auswahl eines Unterkapitels als Liste mit vollständigen Titeln (auch auf dem Handy lesbar)
+let pickCb = null;
+function openPicker(title, sub, cur, cb){
+  let html = "", lastSec = null;
+  for (const t of state.order){
+    const m = state.topics[t].meta;
+    if (m.section && m.section !== lastSec) html += '<div class="sheet-sec">' + esc(m.section) + "</div>";
+    lastSec = m.section || lastSec;
+    html += '<button class="sheet-opt" data-pick="' + esc(t) + '"' + (t === cur ? " disabled" : "") + ">" + esc(topicLabel(t)) + (t === cur ? " (aktuell)" : "") + "</button>";
+  }
+  $("#pickTitle").textContent = title; $("#pickSub").textContent = sub || "";
+  $("#pickList").innerHTML = html; $("#pickList").scrollTop = 0;
+  pickCb = cb; $("#picker").classList.add("open");
+}
+function closePicker(){ $("#picker").classList.remove("open"); pickCb = null; }
 
 function pubHtml(id, tid, idx, n){
   const p = state.pubs[id];
@@ -371,7 +405,7 @@ function pubHtml(id, tid, idx, n){
     '<div class="row">' +
       '<button class="btn small" data-act="up" data-id="' + esc(id) + '"' + (idx === 0 ? " disabled" : "") + ' title="nach oben">↑</button>' +
       '<button class="btn small" data-act="down" data-id="' + esc(id) + '"' + (idx === n - 1 ? " disabled" : "") + ' title="nach unten">↓</button>' +
-      '<label class="meta">Verschieben nach <select data-act="move" data-id="' + esc(id) + '">' + moveOptions(tid) + "</select></label>" + rm +
+      '<button class="btn small" data-act="movepick" data-id="' + esc(id) + '">Verschieben nach …</button>' + rm +
     "</div></div>";
 }
 
@@ -396,7 +430,8 @@ function render(){
 function renderGl(){
   $("#glList").innerHTML = state.guidelines.map((g, i) =>
     '<div class="gl-item"><span class="st ' + (g.pdf ? "ok" : "bad") + '">' + (g.pdf ? "✓ " : "⚠ kein PDF: ") + esc(g.file.name) + "</span>" +
-    '<select data-act="gltopic" data-i="' + i + '"><option value="">Unterkapitel wählen…</option>' + moveOptions(g.topic) + "</select>" +
+    '<button class="btn small" data-act="glpick" data-i="' + i + '">' + (g.topic ? "Unterkapitel ändern …" : "Unterkapitel wählen …") + "</button>" +
+    (g.topic && state.topics[g.topic] ? '<span class="pick-cur">' + esc(topicLabel(g.topic)) + "</span>" : "") +
     '<button class="btn small" data-act="glrm" data-i="' + i + '">Entfernen</button></div>').join("");
 }
 
@@ -434,23 +469,28 @@ document.addEventListener("change", async e => {
   const el = e.target, act = el.dataset.act, id = el.dataset.id;
   if (act === "check"){ state.pubs[id].checked = el.checked; state.dirty = true; el.closest(".pub").classList.toggle("off", !el.checked); updateCounter(); }
   else if (act === "upload" && el.files[0]) await attach(id, el.files[0]);
-  else if (act === "move") moveTo(id, el.value, null);
   else if (act === "extra"){ for (const f of Array.from(el.files)) await addExtra(el.dataset.topic, f); }
-  else if (act === "gltopic"){ state.guidelines[+el.dataset.i].topic = el.value; state.dirty = true; }
   else if (el.id === "glFile"){
     for (const f of Array.from(el.files)){ const buf = await f.arrayBuffer(); state.guidelines.push({file: {name: f.name, buf: buf}, topic: "", pdf: isPdf(buf)}); }
     el.value = ""; state.dirty = true; renderGl();
   } else if (el.id === "openFile" && el.files[0]) await openPackage(el.files[0]);
 });
 document.addEventListener("click", e => {
+  const opt = e.target.closest("[data-pick]");
+  if (opt){ const cb = pickCb; closePicker(); if (cb) cb(opt.dataset.pick); return; }
+  if (e.target.id === "pickCancel" || e.target.id === "picker"){ closePicker(); return; }
   const el = e.target.closest("[data-act]"); if (!el || el.tagName === "SELECT" || el.tagName === "INPUT") return;
   const act = el.dataset.act, id = el.dataset.id;
   if (act === "up" || act === "down"){ const [tid, i] = where(id); moveTo(id, tid, act === "up" ? i - 1 : i + 1); }
   else if (act === "force"){ state.pubs[id].check = "bestätigt"; state.dirty = true; render(); }
   else if (act === "rmfile"){ state.pubs[id].file = null; state.pubs[id].check = ""; state.dirty = true; render(); }
   else if (act === "rmextra"){ const [tid, i] = where(id); state.topics[tid].items.splice(i, 1); delete state.pubs[id]; state.dirty = true; render(); }
+  else if (act === "movepick"){ const [tid] = where(id); openPicker("Verschieben nach", state.pubs[id].title, tid, t => moveTo(id, t, null)); }
+  else if (act === "glpick"){ const i = +el.dataset.i, g = state.guidelines[i]; openPicker("Leitlinie zuordnen", g.file.name, g.topic, t => { g.topic = t; state.dirty = true; renderGl(); }); }
   else if (act === "glrm"){ state.guidelines.splice(+el.dataset.i, 1); state.dirty = true; renderGl(); }
 });
+
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("#picker").classList.contains("open")) closePicker(); });
 
 // Ziehen und Ablegen
 let dragId = null;
