@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -926,6 +927,68 @@ def test_search_plan_and_safety_net():
         pubmed.search, pubmed.fetch_records = orig
 
 
+def test_toc_merge():
+    """Schritt 0: Inhaltsverzeichnisse mehrerer Jahrgänge je Thema zusammenführen; Hot Topics und Einzelkapitel
+    unverändert, Nummern wie im neuesten Jahrgang, Dateinamen mit beiden Autoren beim Autorenwechsel."""
+    from medupdate import toc_merge as M
+    calls = []
+    books = {
+        "HB_2024.txt": {"handbook": "Angio Update", "year": "", "chapters": [
+            {"number": "1", "title": "Ultraschall", "authors": ["Czihal"], "hot_topic": False,
+             "items": [{"level": 1, "title": "Supraaortale Arterien"}, {"level": 2, "title": "Paragangliome"},
+                       {"level": 1, "title": "Literatur"}]},
+            {"number": "2", "title": "Hot Topic: Diabetischer Fuß", "authors": ["Spraul"], "hot_topic": True,
+             "items": [{"level": 1, "title": "Einleitung"}]}]},
+        "HB_2026.txt": {"handbook": "Angio Update", "year": "2026", "chapters": [
+            {"number": "1", "title": "Vaskuläre Funktionsdiagnostik und Ultraschall", "authors": ["Czihal", "Neu"],
+             "hot_topic": False, "items": [{"level": 1, "title": "Supraaortale Arterien"},
+                                           {"level": 2, "title": "Ultraschallmikroskopie"}]}]}}
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema["properties"]
+            calls.append(list(props))
+            if "chapters" in props:
+                name = re.search(r"Datei „([^“]+)“", prompt).group(1)
+                assert "ROHGLIEDERUNG" in prompt
+                return json.loads(json.dumps(books[name]))
+            if "groups" in props:
+                assert "B0C0 | 2024 | Ultraschall" in prompt
+                return {"groups": [{"title": "Vaskuläre Funktionsdiagnostik und Ultraschall", "hot_topic": False,
+                                    "members": ["B0C0", "B1C0"]},
+                                   {"title": "Hot Topic: Diabetischer Fuß", "hot_topic": True, "members": ["B0C1"]}]}
+            if props.keys() == {"items"}:
+                assert "JAHRGANG 2024" in prompt and "JAHRGANG 2026" in prompt and "Literatur" not in \
+                    prompt.split("JAHRGANG 2024")[1].split("JAHRGANG 2026")[0]
+                return {"items": [{"level": 1, "title": "Supraaortale Arterien"},
+                                  {"level": 2, "title": "Ultraschallmikroskopie"}, {"level": 2, "title": "Paragangliome"}]}
+            raise AssertionError(list(props))
+
+    proj = pipeline.new_project()
+    files = [("HB_2024.txt", b"1 ULTRASCHALL\n1.1 Supraaortale Arterien"), ("HB_2026.txt", b"1 X\n1.1 Y")]
+    M.run_toc_merge(L(), proj, files, "", lambda *a: None)
+    st = proj["toc_merge"]
+    assert [c["title"] for c in st["chapters"]] == ["Vaskuläre Funktionsdiagnostik und Ultraschall",
+                                                     "Hot Topic: Diabetischer Fuß"]
+    ch, ht = st["chapters"]
+    assert ch["number"] == "1" and ht["number"] == "2" and ht["how"] == "unverändert übernommen"
+    assert M.as_text(ch).splitlines()[1:] == ["1.1 Supraaortale Arterien", "  1.1.1 Ultraschallmikroskopie",
+                                              "  1.1.2 Paragangliome"]
+    assert M.filename(ch, st["handbook"]) == ("Inhaltsverzeichnis Angio Update 2024_2026_Vaskuläre "
+                                              "Funktionsdiagnostik und Ultraschall_Czihal_Neu.docx")
+    assert M.filename(ht, st["handbook"]) == "Inhaltsverzeichnis Angio Update 2024_Hot Topic Diabetischer Fuß_Spraul.docx"
+    with zipfile.ZipFile(io.BytesIO(M.zip_all(st))) as z:
+        assert len(z.namelist()) == 2
+    n = len(calls)
+    M.run_toc_merge(L(), proj, files, "", lambda *a: None)  # alles zwischengespeichert: keine neuen KI-Kosten
+    assert len(calls) == n
+    # Die Rohgliederung einer Text-Datei filtert Literaturangaben und fügt umbrochene Überschriften zusammen
+    raw = ("x\n" * 80000 + "2 HOT TOPIC: HANDBESCHWERDEN –\nDIFFERENTIALDIAGNOSEN\n2.1 Einleitung\n"
+           "5 Chen SP, Zhong Z, Tu DP. Subtypes of flow\n22 Jahren publiziert.\n").encode()
+    t = M.outline_text("a.txt", raw)
+    assert "2 HOT TOPIC: HANDBESCHWERDEN – DIFFERENTIALDIAGNOSEN" in t and "Chen SP" not in t and "22 Jahren" not in t
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_direct_upload()
@@ -945,6 +1008,7 @@ if __name__ == "__main__":
     test_transition_slots()
     test_selection_package()
     test_guideline_needs()
+    test_toc_merge()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()
     test_full_pipeline()

@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from medupdate import appraisal as A, pipeline, prior, selection_sheet
+from medupdate import appraisal as A, pipeline, prior, selection_sheet, toc_merge
 from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
@@ -195,7 +195,57 @@ def show_job() -> None:
 # SCHRITT 1
 # ======================================================================
 show_job()
+# ----- Optionaler Schritt 0: Inhaltsverzeichnisse früherer Jahrgänge zusammenführen (2026-11-08) -----
+_tm = proj.get("toc_merge") or {}
+with st.expander("0. Inhaltsverzeichnisse früherer Jahrgänge zusammenführen (optional)",
+                 expanded=bool(_tm.get("chapters")) and not proj.get("toc")):
+    st.caption("Laden Sie zwei oder mehr Jahrgänge des Handbuchs hoch (PDF, EPUB, Word oder Text). Die App führt die "
+               "Inhaltsverzeichnisse je Thema zusammen: Dopplungen werden gestrichen, Themen, die nur ein- oder "
+               "zweimal vorkommen, aufgenommen. Hot Topics und Kapitel aus nur einem Jahrgang werden unverändert "
+               "übernommen. Ergebnis: je Thema eine Word-Datei, die Sie direkt in Schritt 1 übernehmen können.")
+    with st.form("step0_merge"):
+        merge_files = st.file_uploader("Handbücher früherer Jahrgänge", type=["pdf", "epub", "docx", "txt"],
+                                       accept_multiple_files=True)
+        merge_name = st.text_input("Name des Handbuchs für die Dateinamen (optional)", value=_tm.get("handbook", ""),
+                                   placeholder="z.B. Angio Update – leer lassen, dann erkennt die App den Namen")
+        _lo, _hi = toc_merge.estimate_usd(3)
+        go0 = st.form_submit_button("🧩 Inhaltsverzeichnisse zusammenführen (bei drei Jahrgängen ca. "
+                                    f"{f'{_lo:.1f}'.replace('.', ',')}–{f'{_hi:.1f}'.replace('.', ',')} USD)")
+    if go0:
+        llm = get_llm(max(CHECK_BUDGET_USD, 2 * toc_merge.estimate_usd(len(merge_files or []))[1]))
+        if llm and len(merge_files or []) < 2:
+            st.warning("Bitte mindestens zwei Jahrgänge hochladen.")
+        elif llm:
+            _files = [(f.name, f.read()) for f in merge_files]
+            _name = merge_name
+            run_with_status("Inhaltsverzeichnisse werden zusammengeführt",
+                            lambda log: toc_merge.run_toc_merge(llm, proj, _files, _name, log), llm)
+    if _tm.get("chapters"):
+        _hb = _tm.get("handbook", "")
+        st.markdown(f"**{len(_tm['chapters'])} Themen** aus {', '.join(_tm.get('files', []))}")
+        st.download_button("⬇️ Alle Inhaltsverzeichnisse als ZIP", toc_merge.zip_all(_tm),
+                           file_name=f"Inhaltsverzeichnisse {_hb}.zip".replace("/", "-"), mime="application/zip")
+        _labels = [f"{c['number']} {c['title']} ({', '.join(dict.fromkeys(c['years']))}; "
+                   f"{', '.join(c['authors']) or 'Autor unbekannt'}; {c['how']})" for c in _tm["chapters"]]
+        _i = st.selectbox("Thema ansehen", range(len(_labels)), format_func=lambda i: _labels[i], key="tm_pick")
+        _ch = _tm["chapters"][_i]
+        st.code(toc_merge.as_text(_ch), language=None)
+        _d1, _d2 = st.columns(2)
+        _d1.download_button("⬇️ Als Word-Datei", toc_merge.chapter_docx(_ch), file_name=toc_merge.filename(_ch, _hb),
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"tm_dl_{_i}")
+        if _d2.button("➡️ Als Inhaltsverzeichnis in Schritt 1 übernehmen", key=f"tm_use_{_i}",
+                      disabled=_running or bool(proj.get("toc"))):
+            proj["toc_from_merge"] = {"name": toc_merge.filename(_ch, _hb), "text": toc_merge.as_text(_ch)}
+            st.rerun()
+        if proj.get("toc"):
+            st.caption("Schritt 1 hat bereits ein Inhaltsverzeichnis. Für ein anderes Thema bitte ein neues Projekt "
+                       "beginnen.")
+
 st.markdown("<div style='font-size:2.2rem; font-weight:700;'>1. Thema und Vorgaben</div>", unsafe_allow_html=True)
+if proj.get("toc_from_merge") and not proj.get("toc"):
+    st.info(f"Inhaltsverzeichnis aus Schritt 0: {proj['toc_from_merge']['name']}. Es wird verwendet, wenn Sie unten "
+            "kein anderes hochladen.")
 
 with st.form("step1"):
     email = st.text_input("E-Mail-Adresse", value=proj.get("email") or secret("UNPAYWALL_EMAIL"),
@@ -258,7 +308,7 @@ if go1:
     llm = get_llm()
     if llm and not email.strip():
         st.warning("Bitte eine E-Mail-Adresse eingeben.")
-    elif llm and not (toc_file or proj.get("toc")):
+    elif llm and not (toc_file or proj.get("toc") or proj.get("toc_from_merge")):
         st.warning("Bitte das Inhaltsverzeichnis hochladen.")
     elif llm:
         proj["email"] = email.strip()
@@ -269,7 +319,8 @@ if go1:
                                      date(int(bis_y), int(bis_m), _last).isoformat()]
         else:
             proj.pop("search_window", None)
-        toc_text = extract_text(toc_file.name, toc_file.read()) if toc_file else ""
+        toc_text = extract_text(toc_file.name, toc_file.read()) if toc_file else \
+            (proj.get("toc_from_merge") or {}).get("text", "")
         guide_text = extract_text(guide_file.name, guide_file.read()) if guide_file else ""
         template = (template_file.name, template_file.read()) if template_file else None
         if prior_files:
