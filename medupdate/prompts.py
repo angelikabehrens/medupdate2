@@ -1028,6 +1028,7 @@ def joint_shorten_prompt(full_text: str, tier: str, sprache_kw: str) -> str:
     ziel_sprache = "englischer" if en else "deutscher"
     fazit_label = "Joint Conclusion" if en else "Gemeinsames Fazit"
     verknuepfung_label = "Assessment of the Linkage" if en else "Einordnung der Verknüpfung"
+    gemeinsam_label = "Joint Appraisal" if en else "Gemeinsame Würdigung"
     uebersicht_label = "Overview of the Publications" if en else "Übersicht der Publikationen"
     wuerdigung_label = "Critical Appraisal" if en else "Kritische Würdigung"
     if tier in ("Kurznachricht", "½ Seite (Kurz)", "⅓ Seite (Kurz)"):
@@ -1054,13 +1055,14 @@ zuerst die Qualität der Evidenz insgesamt ohne Begründung, dann die Praxisauss
     else:
         if tier not in ("1,5 Seiten (Lang)", "1 Seite (Lang)"):
             tier = "1,5 Seiten (Lang)"
-        aufbau = f"""Aufbau in vier Blöcken:
+        aufbau = f"""Aufbau in drei Blöcken:
 1. "{uebersicht_label}" (ca. 25%): wie bei "1 Seite", mit Nennung der Evidenzstufe je Publikation.
-2. "{verknuepfung_label}" (ca. 25%): Fließtext, ob und wie die Verknüpfung zulässig ist, was \
-NICHT zulässig wäre.
-3. "{wuerdigung_label}" (ca. 35%): Fließtext, wichtigste methodische Stärken/Schwächen über die \
-Publikationen hinweg.
-4. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit "{fazit_label}:", kurz und prägnant wie \
+2. Zwischenüberschrift "{gemeinsam_label}" in eigener Zeile (ca. 60%), darunter Fließtext in 2-3 \
+Absätzen: zuerst die Kernaussage aus "{verknuepfung_label}" (ob und wie die Verknüpfung zulässig ist, was \
+NICHT zulässig wäre), dann die wichtigsten methodischen Stärken/Schwächen aus der "{wuerdigung_label}" \
+über die Publikationen hinweg. KEINE weitere Zwischenüberschrift (weder "{verknuepfung_label}" noch \
+"{wuerdigung_label}").
+3. "{fazit_label}:" (ca. 5%): eigener Absatz, beginnt mit "{fazit_label}:", kurz und prägnant wie \
 bei "1 Seite" (siehe Regel unten)."""
     target_words = SKILL_LAENGEN_STUFEN[tier]
     return f"""Du bist wissenschaftlicher Redakteur und kürzt eine bereits erstellte gemeinsame \

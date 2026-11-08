@@ -34,6 +34,21 @@ def _label_of(line: str) -> str | None:
     return next((l.lower() for l in _SKILL_BOLD_LABELS if clean.startswith(l.lower())), None)
 
 
+_JOINT_RENAME = {"einordnung der verknüpfung": "Gemeinsame Würdigung",
+                 "assessment of the linkage": "Joint Appraisal"}
+_JOINT_DROP = {"kritische würdigung", "critical appraisal"}
+
+
+def joint_heading(line: str) -> str:
+    """Gemeinsame Würdigung (Wunsch der Autorin, 2026-11-08): Zwischenüberschrift „Einordnung der
+    Verknüpfung“ heißt „Gemeinsame Würdigung“, die Überschrift „Kritische Würdigung“ entfällt (der Text
+    folgt direkt). Gilt auch für bereits gekürzte Texte, ohne neue Kosten."""
+    key = re.sub(r"\*\*", "", line).strip("*: ").strip().lower()
+    if key in _JOINT_DROP:
+        return ""
+    return _JOINT_RENAME.get(key, line)
+
+
 def short_citation(rec: dict, lit_numbers: list[int]) -> str:
     """'Erstautor et al., Journal Jahr (N)' – wie format_short_citation in MyLuo."""
     authors = rec.get("authors") or []
@@ -141,6 +156,7 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
             in_comment = False
             for line in pub["lines"]:
                 line = re.sub(r"^#+\s*", "", line.strip())
+                line = joint_heading(line)
                 if line and not re.fullmatch(r"[-*_—―]{3,}", line):
                     label = _label_of(line)
                     if label:

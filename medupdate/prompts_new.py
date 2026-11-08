@@ -370,8 +370,8 @@ Labels am Absatzanfang exakt so übersetzen: "Study:" -> "Studie:", "Results:" -
 "Authors' Conclusion:" -> "Schlussfolgerung der Autoren:", "Comment:" -> "Kommentar:", \
 "Conclusion for Practice:" -> "Fazit für die Praxis:", "Overview of the Publications" -> "Übersicht der \
 Publikationen", "Publication 1:" -> "Publikation 1:" (ebenso 2, 3), "Assessment of the Linkage" -> \
-"Einordnung der Verknüpfung", "Critical Appraisal" -> "Kritische Würdigung", "Joint Conclusion:" -> \
-"Gemeinsames Fazit:".
+"Einordnung der Verknüpfung", "Joint Appraisal" -> "Gemeinsame Würdigung", "Critical Appraisal" -> \
+"Kritische Würdigung", "Joint Conclusion:" -> "Gemeinsames Fazit:".
 
 Inhaltliche Treue hat Vorrang vor allem anderen: nichts hinzufügen, nichts weglassen; Zahlen, Effektgrößen, \
 Konfidenzintervalle und p-Werte unverändert (Dezimalpunkt wird zum deutschen Dezimalkomma, sonst keine \

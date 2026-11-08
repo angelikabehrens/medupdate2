@@ -53,15 +53,16 @@ _SKILL_BOLD_LABELS = [
     "Study:", "Results:", "Authors' Conclusion:", "Comment:", "Conclusion for Practice:",
     # Verknüpfungs-Format (Schritt 4B: gemeinsame Würdigung mehrerer Publikationen)
     "Übersicht der Publikationen", "Publikation 1:", "Publikation 2:", "Publikation 3:", "Publikation 4:", "Publikation 5:",
-    "Einordnung der Verknüpfung", "Kritische Würdigung", "Gemeinsames Fazit",
+    "Einordnung der Verknüpfung", "Gemeinsame Würdigung", "Kritische Würdigung", "Gemeinsames Fazit",
     "Overview of the Publications", "Publication 1:", "Publication 2:", "Publication 3:", "Publication 4:", "Publication 5:",
-    "Assessment of the Linkage", "Critical Appraisal", "Joint Conclusion",
+    "Assessment of the Linkage", "Joint Appraisal", "Critical Appraisal", "Joint Conclusion",
 ]
 
 
 # Labels, deren Absatz (samt Folgeabsätzen ohne eigenes Label) wie in der med-update-Vorlage im grauen
 # Kasten („BlockText“) steht, Label fett statt unterstrichen (Wunsch der Autorin, 2026-10-13)
-BOX_LABELS = ("Kommentar:", "Fazit für die Praxis:", "Comment:", "Conclusion for Practice:")
+BOX_LABELS = ("Kommentar:", "Fazit für die Praxis:", "Comment:", "Conclusion for Practice:",
+              "Gemeinsames Fazit", "Joint Conclusion")  # gemeinsames Fazit ebenfalls grau (2026-11-08)
 BOX_FILL = "D9D9D9"
 # Marke am Anfang der Titelzeile (Heading 2) einer Kurznachricht: Kurznachrichten stehen im fertigen Manuskript
 # als Block ohne eigene Titelzeilen (Vorbild Decker, 2026-10-15); die Zeile wird nach der Literatur-
