@@ -392,8 +392,12 @@ if proj.get("toc"):
         _pc1.caption(f"📕 Vorjahresmanuskript: {', '.join(_pr.get('names', []))} · "
                      f"{len(_pr.get('dois', []))} DOI und {len(_pr.get('pmids', []))} PMID erkannt, zusätzlich "
                      f"Abgleich über den Titel · {_n_ex} bereits enthaltene Arbeit(en) nicht empfohlen.")
+        _pw = prior.warning(_pr, _n_ex, proj.get("search_window") or proj.get("plan_window"))
+        if _pw:
+            st.warning("⚠️ " + _pw + " Mit „Abgleich entfernen“ kommen die Arbeiten ohne neue Kosten zurück.")
         if _pc2.button("Abgleich entfernen", key="prior_remove", disabled=_running):
             proj.pop("prior")
+            proj.pop("prior_warning", None)
             pipeline.apply_prior(proj)
             pipeline.fit_to_length(proj)
             st.rerun()
@@ -478,7 +482,8 @@ if proj.get("toc"):
     lp = proj.get("length_plan") or {}
     plan_tiers = lp.get("tiers", {})
     if lp:
-        st.caption(f"Ausgewählt werden nur Arbeiten der Priorität A. Geschätzter Umfang ≈{lp['pages']} Seiten"
+        st.caption(f"Empfohlen werden die besten Arbeiten des Kapitels bis zur Zielzahl (Priorität A zuerst, dann "
+                   f"nach Score); jede Arbeit steht in dem Thema, zu dem sie am besten passt. Geschätzter Umfang ≈{lp['pages']} Seiten"
                    + (f" (max. {lp['max_pages']} laut Hinweisen für Autoren)" if lp.get("max_pages") else "")
                    + (f"; {len(lp['overflow'])} Arbeit(en) wegen der Gesamtlänge in die Reserve verschoben."
                       if lp.get("overflow") else "."))
@@ -505,7 +510,7 @@ if proj.get("toc"):
                     st.info("Noch keine Literaturempfehlung.")
                 continue
             if not rec_ids:
-                st.warning("Keine Arbeit der Priorität A gefunden. Bei Bedarf eine Arbeit aus der Reserve anhaken.")
+                st.warning("Keine Empfehlung für dieses Thema. Bei Bedarf eine Arbeit aus der Reserve anhaken.")
             st.caption(f"Zeitraum {t['window'][0]} bis {t['window'][1]} · {t['n_candidates']} Kandidaten bewertet · "
                        f"Treffer je Suchstrategie: {t.get('query_hits')}")
             if t.get("prior_excluded"):
@@ -514,6 +519,13 @@ if proj.get("toc"):
                         _r = proj["records"].get(_p, {})
                         st.markdown(f"- {_r.get('title', _p)} — {_r.get('journal', '')} {_r.get('year', '')} "
                                     f"(erkannt über {_e.get('why', '')})")
+            if t.get("background"):
+                with st.popover(f"📖 {len(t['background'])} Hintergrundliteratur (wird nicht gewürdigt)"):
+                    st.caption("Leitlinien, Konsensuspapiere und Übersichten aus dem Suchzeitraum zum Nachlesen; "
+                               "sie stehen auch in der Auswahlliste und können im Kommentar zitiert werden.")
+                    for _p in t["background"]:
+                        _r = proj["records"].get(_p, {})
+                        st.markdown(f"- {_r.get('title', _p)} — {_r.get('journal', '')} {_r.get('year', '')}")
             with st.popover("🔎 Verwendete PubMed-Suchen"):
                 for a in t.get("attempts") or [{"window": t["window"], "queries": t.get("plan", {}).get("queries", []),
                                                 "hits": t.get("query_hits", {})}]:

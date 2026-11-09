@@ -104,7 +104,14 @@ def sheet_data(proj: dict) -> dict:
                        "section": f"{t.get('section_number', '')} {t.get('section_title', '')}".strip()
                        if t.get("section_title") and t.get("section_title") != t["title"] else "",
                        "items": items,
-                       "guidelines": _sheet_guidelines(t)})
+                       "guidelines": _sheet_guidelines(t),
+                       "background": [{"title": (proj["records"].get(p) or {}).get("title", p),
+                                       "authors": _authors(proj["records"].get(p) or {}),
+                                       "source": _source(proj["records"].get(p) or {}),
+                                       "doi": (proj["records"].get(p) or {}).get("doi", ""),
+                                       "pmid": p if p.isdigit() else "",
+                                       "design": (rk.get(p) or rankings.get(p) or {}).get("study_design", "")}
+                                      for p in t.get("background", [])]})
     n, why = target_count(proj)
     toc = proj.get("toc") or {}
     return {"format": FORMAT, "version": FORMAT_VERSION, "project_id": proj.get("id", ""),
@@ -237,6 +244,7 @@ padding:9px 10px;margin:6px 0;background:#fff}
 .st.info{background:var(--mist);color:var(--ink)}
 .extra-box{border-top:1px solid var(--line);padding:8px 14px;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .gl{font-size:13px;color:var(--muted);padding:4px 14px 8px}
+.bg ul{margin:4px 0 0 18px;padding:0}.bg li{margin:2px 0}
 .gl-want{color:var(--ink);background:var(--ochre-tint);margin:4px 10px;border-radius:6px;padding:6px 12px}.gl-want ul{margin:4px 0 0 18px;padding:0}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:22px 0}
 .panel h2{font:600 17px Cambria,Georgia,serif;margin:0 0 6px}
@@ -438,6 +446,13 @@ function glHtml(gls){
   return h;
 }
 
+function bgHtml(bg){
+  if (!bg || !bg.length) return "";
+  return '<div class="gl bg"><b>Hintergrundliteratur zum Nachlesen</b> (Leitlinien, Konsensuspapiere, Übersichten aus dem Suchzeitraum; werden nicht gewürdigt, können im Kommentar zitiert werden):<ul>' +
+    bg.map(b => "<li>" + esc(b.title) + '<span class="meta"> · ' + esc([b.authors, b.source, b.design].filter(Boolean).join(" · ")) + "</span>" +
+      (b.pmid ? ' · <a href="https://pubmed.ncbi.nlm.nih.gov/' + esc(b.pmid) + '/" target="_blank" rel="noopener">PubMed</a>' : "") + "</li>").join("") + "</ul></div>";
+}
+
 function render(){
   const root = $("#topics"); let html = "", lastSec = null;
   for (const tid of state.order){
@@ -448,6 +463,7 @@ function render(){
     html += '<div class="list" data-topic="' + esc(tid) + '">' +
       (items.length ? items.map((id, i) => pubHtml(id, tid, i, items.length)).join("") : '<div class="empty">Noch keine Publikation. Hierher ziehen oder unten hochladen.</div>') + "</div>";
     html += glHtml(m.guidelines || []);
+    html += bgHtml(m.background);
     html += '<div class="extra-box">Weitere Publikationen zu diesem Unterkapitel (PDF): <label class="filebtn">Datei hochladen<input type="file" accept=".pdf,application/pdf" multiple data-act="extra" data-topic="' + esc(tid) + '"></label></div></div>';
   }
   root.innerHTML = html;

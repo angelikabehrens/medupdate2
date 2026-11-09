@@ -226,7 +226,8 @@ def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, r
     for t in topics:
         pmids = [p for p in dict.fromkeys(t.get("pmids", [])) if p not in seen]
         seen.update(pmids)
-        if not pmids:
+        background = [p for p in t.get("background", []) if p in records]
+        if not pmids and not background:
             continue
         doc.add_heading(t["title"], level=2)
         for n, pmid in enumerate(pmids, start=1):
@@ -253,6 +254,16 @@ def build_recommendation_docx(chapter: str, topics: list[dict], records: dict, r
                           f"Bedeutung {it.get('question_importance', '?')} · "
                           f"IF {it.get('journal_impact_factor') or 'k. A.'} · "
                           f"{it.get('study_design', '')}. {it.get('rationale', '')}").italic = True
+        if background:
+            b = doc.add_paragraph()
+            b.add_run("Hintergrundliteratur zum Nachlesen (wird nicht gewürdigt):").italic = True
+            for pmid in background:
+                rec = records.get(pmid, {})
+                authors = rec.get("authors") or []
+                a = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
+                doc.add_paragraph(f"{a.rstrip('.')}. {rec.get('title', '').rstrip('.')}. {rec.get('journal', '')} "
+                                  f"{rec.get('year', '')}." + (f" PMID: {pmid}" if pmid.isdigit() else ""),
+                                  style="List Bullet")
     footer = doc.sections[0].footer.paragraphs[0]  # Seitenzahlen
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     add_field(footer, "PAGE")

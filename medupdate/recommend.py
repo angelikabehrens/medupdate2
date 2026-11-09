@@ -150,6 +150,15 @@ def safety_queries(frame: dict) -> list[dict]:
 
 
 MIN_CANDIDATES = 8
+BROAD_HITS = 1000          # ab so vielen Treffern einer Suchstrategie gilt ein Thema als breit
+BROAD_CANDIDATES = 100     # breite Themen: so viele Kandidaten bewerten (sonst MAX_CANDIDATES_PER_TOPIC)
+
+
+def candidate_limit(counts: dict | None) -> int:
+    """Wie viele Kandidaten ein Thema bewertet (Angelika 2026-11-09: bei sehr breiten Suchen mehr als 60,
+    damit Epidemiologie- und Lebensstilthemen nicht an der Kandidatenzahl scheitern)."""
+    nums = [v for v in (counts or {}).values() if isinstance(v, int)]
+    return BROAD_CANDIDATES if nums and max(nums) > BROAD_HITS else MAX_CANDIDATES_PER_TOPIC
 
 
 def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
@@ -166,7 +175,9 @@ def collect_candidates(plan: dict, von: date, bis: date, email: str,
     suffix = _suffix(von, bis)
     per_query: list[list[str]] = []
     stats = {}
-    for q in plan.get("queries", []):
+    # Die Strategie „hohe Evidenz“ zuerst: beim Reißverschluss kommen ihre Treffer bevorzugt in die Kandidaten
+    queries = sorted(plan.get("queries", []), key=lambda q: "evidenz" not in (q.get("name") or "").lower())
+    for q in queries:
         if not (q.get("query") or "").strip():
             continue
         try:
@@ -262,7 +273,8 @@ MAX_PER_QUESTION = 3
 
 
 def select(ranking: dict[str, dict], n_max: int, reserve: int = 3) -> tuple[list[str], list[str]]:
-    """Nur Priorität A; höchstens 3 Arbeiten pro Fragestellung (gemeinsame Würdigung) und höchstens n_max je Thema.
+    """Auswahl innerhalb eines Themas (Grundlage; die endgültige Empfehlung trifft seit 2026-11-09
+    pipeline.select_chapter kapitelweit). Nur Priorität A; höchstens 3 Arbeiten pro Fragestellung (gemeinsame Würdigung) und höchstens n_max je Thema.
     Reserve (nicht vorausgewählt): weitere A-Arbeiten über der Obergrenze, sonst die besten B-Arbeiten."""
     for pmid, item in ranking.items():
         item["score"] = score(item)
@@ -309,7 +321,10 @@ def with_manual(plan: dict, manual: str) -> dict:
 
 def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str,
                         n_max: int, log=lambda msg: None, window: list[str] | None = None,
-                        plan: dict | None = None, frame: dict | None = None) -> dict:
+                        plan: dict | None = None, frame: dict | None = None,
+                        known: dict | None = None, limit: int | None = None) -> dict:
+    """known: bereits vorliegende Bewertungen dieses Themas (gleicher Suchplan); sie werden übernommen und
+    nur neue Kandidaten bewertet. limit: Zahl der Kandidaten (Standard: nach den Trefferzahlen, candidate_limit)."""
     fixed = manual_window(window)
     von, bis = fixed or time_window(rules.get("recency_months", 0))
     if plan is None:
@@ -317,7 +332,9 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
         plan = plan_search(llm, topic, chapter, von, bis, frame)
     plan = with_manual(plan, topic.get("manual_query", ""))
     log(f"PubMed-Suche für „{topic['title']}“…")
-    pmids, stats = collect_candidates(plan, von, bis, email)
+    pmids, stats = collect_candidates(plan, von, bis, email, limit=BROAD_CANDIDATES)
+    limit = limit or candidate_limit(stats)  # Trefferzahlen entscheiden, ob das Thema breit ist
+    pmids = pmids[:limit]
     attempts = [{"window": [von.isoformat(), bis.isoformat()], "queries": plan.get("queries", []), "hits": stats}]
     if len(pmids) < MIN_CANDIDATES:
         # Zu wenige Treffer: zuerst sensitivere Suchstrategien, dann ein doppelt so langer Zeitraum
@@ -342,9 +359,16 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
     log(f"{len(candidates)} Kandidaten für „{topic['title']}“ werden bewertet…")
     months = rules.get("recency_months") or 12
     period = (f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}" if fixed else f"der letzten {months} Monate")
-    ranking = rank(llm, topic, plan.get("pico", ""), candidates, period) if candidates else {}
+    known = known or {}
+    new = [c for c in candidates if c["pmid"] not in known]
+    if known:
+        log(f"{len(candidates) - len(new)} Kandidaten für „{topic['title']}“ sind schon bewertet, {len(new)} neu.")
+    ranking = dict(known)
+    if new:
+        ranking.update(rank(llm, topic, plan.get("pico", ""), new, period))
     chosen, backup = select(ranking, n_max)
     return {
+        "cand_limit": limit,
         "plan": plan, "window": [von.isoformat(), bis.isoformat()], "query_hits": stats, "attempts": attempts,
         "n_candidates": len(candidates), "ranking": ranking, "recommended": chosen, "reserve": backup,
         "records": {p: records[p] for p in set(chosen) | set(backup) | set(ranking) if p in records},

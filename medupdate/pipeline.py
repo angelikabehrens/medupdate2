@@ -25,7 +25,7 @@ from .citations import (
     reconcile_local_citations,
     strip_appraisal_preamble,
 )
-from .config import APP_VERSION, MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
+from .config import APP_VERSION, MAX_CANDIDATES_PER_TOPIC, MAX_PUBS_PER_TOPIC, MODEL_FAST, MODEL_MAIN, PARALLEL_WORKERS
 from .files import extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
@@ -259,13 +259,24 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
             # nicht suchbare Überschrift (z.B. „Kuriosa“): wird über das Sicherheitsnetz abgedeckt
             t.update({"recommended": [], "reserve": [], "ranking": {}, "n_candidates": 0, "query_hits": {},
                       "window": list(proj.get("plan_window") or ["", ""]), "plan": {"queries": []}})
+    def fresh(t):  # neu suchen und vollständig neu bewerten
+        return ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
+                or t.get("plan_rev", 0) != t.get("ranked_rev", 0))
+
+    def widen(t):  # breites Thema mit bisher 60 Kandidaten: nur die zusätzlichen Kandidaten bewerten
+        return (t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
+                and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15)
+
     todo = [(tid, t) for tid, t in _search_topics(proj) if t.get("searchable") is not False
-            and ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
-                 or t.get("plan_rev", 0) != t.get("ranked_rev", 0))]
+            and (fresh(t) or widen(t))]
 
     def work(t):
+        known = None
+        if not fresh(t):
+            known = dict(t.get("ranking") or {})
+            known.update({p: e["item"] for p, e in (t.get("prior_excluded") or {}).items()})
         return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window,
-                                             plan=t.get("plan"), frame=frame)
+                                             plan=t.get("plan"), frame=frame, known=known)
 
     for tid, res in _parallel(todo, work, log, "Literaturempfehlung").items():
         if isinstance(res, Exception):
@@ -282,17 +293,25 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
                                                       if q.get("name") != "eigene"]}
         else:
             res.pop("plan", None)  # den (ggf. bearbeiteten) Suchplan nicht überschreiben
+        t.pop("prior_excluded", None)  # wird von apply_prior aus der neuen Rangliste neu bestimmt
         t.update(res)
         t["manual_query"] = manual
         t["ranked_rev"] = t.get("plan_rev", 0)
-    apply_prior(proj, log)
+    apply_prior(proj, log, reselect=False)
     try:
         run_safety_net(llm, proj, log)
     except AccountError:
         raise
     except Exception as ex:
         _err(proj, "Sicherheitsnetz", ex)
-    apply_prior(proj, log)
+    try:
+        run_reroute(llm, proj, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Bewertung im passenden Thema", ex)
+    apply_prior(proj, log, reselect=False)
+    select_chapter(proj, log)
 
     # Open-Access-Status der empfohlenen Arbeiten
     for t in proj["topics"].values():
@@ -307,7 +326,7 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
 SAFETY_MAX_CANDIDATES = 60
 
 
-def apply_prior(proj: dict, log=lambda m: None) -> int:
+def apply_prior(proj: dict, log=lambda m: None, reselect: bool = True) -> int:
     """Arbeiten aus dem Vorjahresmanuskript (proj["prior"]) aus Empfehlung, Reserve und Auswahl nehmen und
     die Lücke aus der Rangliste auffüllen (ohne KI). Ausgeschlossene Arbeiten werden je Thema unter
     t["prior_excluded"] gemerkt; ohne Vorjahresmanuskript (oder nach dem Entfernen) kommen sie zurück.
@@ -341,8 +360,13 @@ def apply_prior(proj: dict, log=lambda m: None) -> int:
         if not ex:
             t.pop("prior_excluded", None)
         total.update(ex)
+    proj["prior_warning"] = prior.warning(pr, len(total), proj.get("search_window") or proj.get("plan_window"))
     if pr:
         log(f"Vorjahresmanuskript: {len(total)} bereits gewürdigte oder zitierte Arbeiten ausgeschlossen.")
+        if proj["prior_warning"]:
+            log("⚠️ " + proj["prior_warning"])
+    if reselect:
+        select_chapter(proj, log)
     return len(total)
 
 
@@ -423,6 +447,156 @@ def run_safety_net(llm: LLM, proj: dict, log) -> None:
     net["assigned"], net["orphans"] = len(net.get("items", {})) - len(orphans), len(orphans)
     log(f"Sicherheitsnetz: {net.get('n_new', 0)} weitere Arbeiten bewertet, {net['assigned']} einem Thema "
         f"zugeordnet, {len(orphans)} als mögliches neues Thema.")
+
+
+# ----------------------------------------------------------------------
+# Kapitelweite Auswahl (Angelika 2026-11-09, alle sechs Vorschläge der Analyse pAVK konservativ)
+# ----------------------------------------------------------------------
+
+CHAPTER_MIN_SCORE = 45   # relative Empfehlung: darunter wird auch bei freier Zielzahl nichts empfohlen
+SHEET_MIN_ITEMS = 8      # Auswahlliste: so viele Arbeiten je Thema mindestens zeigen (Empfehlung + Reserve)
+SHEET_MIN_RELEVANCE = 40  # Auffüllen der Liste nur mit Arbeiten, die zum Thema passen
+BACKGROUND_MAX = 5       # Hintergrundliteratur je Thema
+BACKGROUND_MIN_RELEVANCE = 70
+REROUTE_MAX = 80         # so viele gute Arbeiten höchstens in einem passenderen Thema nachbewerten
+REROUTE_MIN_EVIDENCE = 55
+REROUTE_MAX_RELEVANCE = 70  # gilt für die beste bisherige Relevanz der Arbeit
+
+
+def _best_topics(proj: dict) -> dict[str, tuple[str, dict]]:
+    """{pmid: (Thema, Bewertung)} – jedes Thema, in dem eine Arbeit am besten passt (höchste Relevanz,
+    bei Gleichstand höherer Score). Berechnet dabei Score, Priorität und Längenwert aller Bewertungen."""
+    best: dict[str, tuple[str, dict]] = {}
+    for tid, t in _search_topics(proj):
+        rk = t.get("ranking") or {}
+        recommend.select(rk, 0)
+        for p, it in rk.items():
+            cur = best.get(p)
+            if cur is None or (it.get("relevance", 0), it.get("score", 0)) > \
+                    (cur[1].get("relevance", 0), cur[1].get("score", 0)):
+                best[p] = (tid, it)
+    return best
+
+
+def select_chapter(proj: dict, log=lambda m: None) -> None:
+    """Empfehlung kapitelweit und relativ: Die besten Originalarbeiten des Kapitels werden bis zur Zielzahl
+    (Höchstzahl gewürdigter Publikationen bzw. Summe der Würdigungslängen) empfohlen, Priorität A zuerst,
+    dann nach Score. Jede Arbeit steht nur in dem Thema, zu dem sie am besten passt. Je Thema bleiben die
+    Obergrenze (Hinweise für Autoren, sonst 6) und höchstens 3 Arbeiten je Fragestellung.
+    Reserve: alle weiteren A- und B-Arbeiten des Themas, aufgefüllt auf mindestens 8 Einträge.
+    Hintergrundliteratur: passende Leitlinien, Konsensuspapiere und Reviews (werden nicht gewürdigt)."""
+    from .selection_sheet import target_count
+    topics = _search_topics(proj)
+    if not any(t.get("ranking") for _, t in topics):
+        return
+    rules = proj.get("rules") or {}
+    n_topic = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
+    target = target_count(proj)[0] or n_topic * len(topics)
+    best = _best_topics(proj)
+    primary = {p: v for p, v in best.items() if v[1].get("is_primary_research", True)}
+    eligible = [p for p, (_, it) in primary.items() if it.get("relevance", 0) >= recommend.RELEVANCE_MIN
+                and (it.get("priority") == "A" or it.get("score", 0) >= CHAPTER_MIN_SCORE)]
+    eligible.sort(key=lambda p: (primary[p][1].get("priority") == "A", primary[p][1].get("score", 0),
+                                 primary[p][1].get("length_score", 0)), reverse=True)
+    rec: dict[str, list[str]] = {tid: [] for tid, _ in topics}
+    per_key: dict[tuple, int] = {}
+    for p in eligible:
+        if sum(len(v) for v in rec.values()) >= target:
+            break
+        tid, it = primary[p]
+        key = (tid, (it.get("question_key") or p).strip().lower())
+        if len(rec[tid]) >= n_topic or per_key.get(key, 0) >= recommend.MAX_PER_QUESTION:
+            continue
+        rec[tid].append(p)
+        per_key[key] = per_key.get(key, 0) + 1
+    taken = {p for v in rec.values() for p in v}
+    changed = 0
+    for tid, t in topics:
+        rk = t.get("ranking") or {}
+        mine = sorted(rec[tid], key=lambda p: (rk[p].get("length_score", 0), rk[p].get("score", 0)), reverse=True)
+        own = [p for p, (b, _) in primary.items() if b == tid and p not in taken]
+        own.sort(key=lambda p: (rk[p].get("priority") in ("A", "B"), rk[p].get("score", 0)), reverse=True)
+        reserve = [p for p in own if rk[p].get("priority") in ("A", "B")
+                   and rk[p].get("relevance", 0) >= recommend.RELEVANCE_MIN]
+        for p in own:
+            if len(mine) + len(reserve) >= SHEET_MIN_ITEMS:
+                break
+            if p not in reserve and rk[p].get("relevance", 0) >= SHEET_MIN_RELEVANCE:
+                reserve.append(p)
+        old = t.get("recommended", [])
+        if t.get("selected") is not None and list(t["selected"]) == list(old):
+            t.pop("selected")  # unverändert übernommene Empfehlung folgt der neuen Empfehlung
+        if mine != old:
+            changed += 1
+        t["recommended"], t["reserve"] = mine, reserve
+        bg = [p for p, (b, it) in best.items() if b == tid and not it.get("is_primary_research", True)
+              and it.get("relevance", 0) >= BACKGROUND_MIN_RELEVANCE]
+        bg.sort(key=lambda p: (rk[p].get("relevance", 0), rk[p].get("score", 0)), reverse=True)
+        t["background"] = bg[:BACKGROUND_MAX]
+    if changed:
+        bump_selection(proj)
+    n_rec = len(taken)
+    n_a = sum(1 for p in taken if primary[p][1].get("priority") == "A")
+    log(f"Kapitelweite Auswahl: {n_rec} von {target} Empfehlungen ({n_a} mit Priorität A, die übrigen nach "
+        f"Score), Reserve und Hintergrundliteratur je Thema aktualisiert.")
+
+
+def run_reroute(llm: LLM, proj: dict, log) -> None:
+    """Gute Originalarbeiten, die in keinem ihrer bisherigen Themen gut passen (Relevanz unter 70), werden dem
+    am besten passenden Thema zugeordnet und dort zusätzlich bewertet (z. B. eine Inclisiran-Studie, die nur
+    die Suche zu Lp(a) gefunden hat, unter PCSK9-Inhibition). Ergebnisse werden je Arbeit gemerkt."""
+    topics = _search_topics(proj)
+    valid = {tid for tid, _ in topics}
+    best = _best_topics(proj)
+    done = proj.setdefault("reroute", {})
+    cands = [p for p, (_, it) in best.items() if p not in done and it.get("is_primary_research", True)
+             and it.get("evidence", 0) >= REROUTE_MIN_EVIDENCE and it.get("relevance", 0) < REROUTE_MAX_RELEVANCE
+             and p in proj["records"]]
+    cands.sort(key=lambda p: -best[p][1].get("evidence", 0))
+    cands = cands[:REROUTE_MAX]
+    if not cands:
+        return
+    log(f"{len(cands)} gute Arbeiten werden dem passendsten Thema zugeordnet…")
+    topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
+    assign: dict[str, str] = {}
+    for i in range(0, len(cands), 40):
+        part = cands[i:i + 40]
+        pubs_block = "\n".join(f"{p}: {proj['records'][p].get('title', '')} – "
+                                f"{' '.join((proj['records'][p].get('abstract') or '').split())[:400]}" for p in part)
+        data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, model=MODEL_FAST,
+                        max_tokens=4000, effort="low")
+        assign.update({a["key"]: a["topic_id"] for a in data.get("assignments", []) if a.get("key") in part})
+    by_topic: dict[str, list[str]] = {}
+    for p in cands:
+        tid = assign.get(p, "")
+        done[p] = tid if tid in valid else ""
+        if tid in valid and p not in (proj["topics"][tid].get("ranking") or {}) \
+                and p not in (proj["topics"][tid].get("prior_excluded") or {}):
+            by_topic.setdefault(tid, []).append(p)
+    if not by_topic:
+        return
+    rules = proj.get("rules") or {}
+    von, bis = recommend.search_window(rules, proj.get("search_window"))
+    period = f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}"
+
+    def work(item):
+        tid, pmids = item
+        t = proj["topics"][tid]
+        return recommend.rank(llm, t, (t.get("plan") or {}).get("pico", ""),
+                              [proj["records"][p] for p in pmids], period)
+
+    res = _parallel([(tid, (tid, pm)) for tid, pm in by_topic.items()], work, log, "Bewertung im passenden Thema")
+    n = 0
+    for tid, items in res.items():
+        if isinstance(items, Exception):
+            _err(proj, f"Bewertung im passenden Thema {proj['topics'][tid]['title']}", items)
+            for p in by_topic[tid]:
+                done.pop(p, None)
+            continue
+        for p, it in items.items():
+            proj["topics"][tid].setdefault("ranking", {})[p] = {**it, "via": "Themenzuordnung"}
+            n += 1
+    log(f"{n} Arbeiten zusätzlich im passenden Thema bewertet.")
 
 
 def _enabled_topics(proj: dict) -> list[str]:
@@ -550,7 +724,8 @@ def recommendation_docx(proj: dict) -> bytes:
     by_topic: dict[str, list[str]] = {}
     for p, tid in _pub_list(proj):  # aktuelle Auswahl, jede Publikation nur einmal
         by_topic.setdefault(tid, []).append(p)
-    topics = [{"title": f"{t.get('number', '')} {t['title']}".strip(), "pmids": by_topic.get(tid, [])}
+    topics = [{"title": f"{t.get('number', '')} {t['title']}".strip(), "pmids": by_topic.get(tid, []),
+               "background": t.get("background", [])}
               for tid, t in proj["topics"].items() if t.get("enabled", True)]
     return build_recommendation_docx((proj["toc"] or {}).get("chapter_title", ""), topics, proj["records"], rankings)
 

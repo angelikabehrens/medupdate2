@@ -626,7 +626,7 @@ def test_manual_window():
     assert recommend.manual_window(None) is None
     seen = []
     orig = recommend.collect_candidates
-    recommend.collect_candidates = lambda plan, von, bis, email: (seen.append((von, bis)) or ([], {}))
+    recommend.collect_candidates = lambda plan, von, bis, email, limit=60: (seen.append((von, bis)) or ([], {}))
     try:
         res = recommend.recommend_for_topic(FakeLLM(), {"title": "Thema Eins"}, "Gastro", {}, "x@y.z", 6,
                                             window=["2025-03-01", "2026-02-28"])
@@ -927,6 +927,67 @@ def test_search_plan_and_safety_net():
         pubmed.search, pubmed.fetch_records = orig
 
 
+def test_chapter_selection():
+    """Angelika 2026-11-09: relative Empfehlung bis zur Zielzahl, Reserve auf 8 aufgefüllt, Hintergrundliteratur,
+    Bewertung im passenden Thema, Warnung beim falschen Vorjahresmanuskript, strengerer Titelabgleich."""
+    from medupdate import prior
+    def it(rel, ev, imp, nov=60, primary=True, key=""):
+        return {"relevance": rel, "evidence": ev, "practice_impact": imp, "novelty": nov, "risk_of_bias": "Low",
+                "question_importance": 70, "journal_impact_factor": 5, "is_primary_research": primary,
+                "question_key": key, "study_design": "RCT", "rationale": "r"}
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "pAVK konservativ"}
+    proj["manual_limits"] = {"publications": 5}
+    pipeline.apply_manual_limits(proj)
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "PCSK9", "ranking": {
+            "1": it(90, 90, 80), "2": it(80, 70, 50, key="a"), "3": it(75, 60, 40, key="b"),
+            "4": it(60, 50, 30, key="c"), "5": it(45, 40, 20, key="d"), "6": it(30, 40, 20, key="e"),
+            "R": it(85, 40, 30, primary=False)}},
+        "T2": {"id": "T2", "title": "Lp(a)", "ranking": {
+            "2": it(40, 70, 50, key="a"), "7": it(85, 75, 55, key="f"), "8": it(70, 65, 45, key="g")}},
+    }
+    proj["records"] = {p: {"pmid": p, "title": f"Titel {p}", "authors": ["Muster A"], "abstract": "x",
+                           "journal": "J", "year": "2025", "pub_types": []} for p in "12345678R"}
+    pipeline.select_chapter(proj)
+    t1, t2 = proj["topics"]["T1"], proj["topics"]["T2"]
+    rec = t1["recommended"] + t2["recommended"]
+    assert len(rec) == 5 and "1" in rec and "6" not in rec, rec  # Zielzahl 5, Relevanz 30 nie empfohlen
+    assert "2" in t1["recommended"] and "2" not in t2["recommended"] + t2["reserve"]  # bestes Thema T1
+    assert t1["ranking"]["2"]["priority"] != "A"  # relative Empfehlung auch ohne Priorität A
+    assert "R" not in rec and t1["background"] == ["R"]  # Review nur als Hintergrundliteratur
+    assert "6" not in t1["reserve"] and set(t1["recommended"] + t1["reserve"]) >= {"1", "2", "3", "4", "5"}
+    # Bewertung im passenden Thema: gute Arbeit 8 passt laut Zuordnung besser zu T1
+    proj["topics"]["T2"]["ranking"]["8"]["relevance"] = 50
+    calls = []
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema.get("properties", {})
+            if "assignments" in props:
+                return {"assignments": [{"key": "8", "topic_id": "T1"}]}
+            calls.append(prompt)
+            return {"items": [{**it(88, 65, 60, key="g"), "pmid": "8"}]}
+    pipeline.run_reroute(L(), proj, lambda *a: None)
+    assert t1["ranking"]["8"]["via"] == "Themenzuordnung" and len(calls) == 1
+    pipeline.run_reroute(L(), proj, lambda *a: None)  # gemerkt: kein zweiter Aufruf
+    assert len(calls) == 1
+    # Kandidatenzahl bei breiten Themen
+    assert recommend.candidate_limit({"breit": 17959, "praezise": 400}) == recommend.BROAD_CANDIDATES
+    assert recommend.candidate_limit({"praezise": 400, "x": "Fehler"}) == 60
+    # Titelabgleich nur mit Erstautor in der Nähe; Warnung beim aktuellen Jahrgang
+    pr = prior.build_prior({"8 pAVK Angio Update 2026.pdf": "Samuel M, Berry C. Long-term trials of colchicine "
+                            "for secondary prevention of vascular events: a meta-analysis. Eur Heart J 2025."})
+    other = {"title": "Colchicine for secondary prevention of vascular events: a meta-analysis of trials.",
+             "authors": ["Fiolet ATL"]}
+    own = {"title": "Long-term trials of colchicine for secondary prevention of vascular events: a meta-analysis.",
+           "authors": ["Samuel M"]}
+    assert prior.match(other, pr) == "" and prior.match(own, pr) == "Titel"
+    assert "Vorjahres" in prior.warning(pr, 1, ["2025-03-01", "2026-03-31"])
+    assert prior.warning(pr, 1, ["2026-03-01", "2027-03-31"]) == ""
+    assert "16 der" in prior.warning(pr, 16, ["2026-03-01", "2027-03-31"])
+
+
 def test_toc_merge():
     """Schritt 0: Inhaltsverzeichnisse mehrerer Jahrgänge je Thema zusammenführen; Hot Topics und Einzelkapitel
     unverändert, Nummern wie im neuesten Jahrgang, Dateinamen mit beiden Autoren beim Autorenwechsel."""
@@ -1009,6 +1070,7 @@ if __name__ == "__main__":
     test_selection_package()
     test_guideline_needs()
     test_toc_merge()
+    test_chapter_selection()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()
     test_full_pipeline()
