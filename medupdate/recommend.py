@@ -21,6 +21,7 @@ Ablauf pro Thema:
 from __future__ import annotations
 
 import math
+import re
 
 from datetime import date, timedelta
 
@@ -152,13 +153,19 @@ def safety_queries(frame: dict) -> list[dict]:
 MIN_CANDIDATES = 8
 BROAD_HITS = 1000          # ab so vielen Treffern einer Suchstrategie gilt ein Thema als breit
 BROAD_CANDIDATES = 100     # breite Themen: so viele Kandidaten bewerten (sonst MAX_CANDIDATES_PER_TOPIC)
+PRECISE_HITS = 150         # ab so vielen Treffern der präzisen Suche ebenfalls 100 Kandidaten
 
 
 def candidate_limit(counts: dict | None) -> int:
     """Wie viele Kandidaten ein Thema bewertet (Angelika 2026-11-09: bei sehr breiten Suchen mehr als 60,
-    damit Epidemiologie- und Lebensstilthemen nicht an der Kandidatenzahl scheitern)."""
-    nums = [v for v in (counts or {}).values() if isinstance(v, int)]
-    return BROAD_CANDIDATES if nums and max(nums) > BROAD_HITS else MAX_CANDIDATES_PER_TOPIC
+    damit Epidemiologie- und Lebensstilthemen nicht an der Kandidatenzahl scheitern; 2026-11-10 nach dem
+    Vergleich pAVK interventionell: auch, wenn schon die präzise Suche mehr als 150 Treffer liefert)."""
+    counts = counts or {}
+    nums = [v for v in counts.values() if isinstance(v, int)]
+    precise = counts.get("praezise")
+    if (nums and max(nums) > BROAD_HITS) or (isinstance(precise, int) and precise >= PRECISE_HITS):
+        return BROAD_CANDIDATES
+    return MAX_CANDIDATES_PER_TOPIC
 
 
 def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
@@ -308,6 +315,30 @@ def manual_window(window: list[str] | None) -> tuple[date, date] | None:
 
 def search_window(rules: dict, window: list[str] | None = None) -> tuple[date, date]:
     return manual_window(window) or time_window(rules.get("recency_months", 0))
+
+
+def window_warning(window: list[str] | None, prior_names: list[str] | None = None,
+                   today: date | None = None) -> str:
+    """Hinweis, wenn der manuelle Suchzeitraum vermutlich falsch eingestellt ist: Er endet in der Zukunft,
+    oder er passt nicht zum Jahr im Dateinamen des Vorjahresmanuskripts (Manuskript aus Jahr J: Suchzeitraum
+    beginnt spätestens in J und endet spätestens in J+1)."""
+    w = manual_window(window)
+    if not w:
+        return ""
+    von, bis = w
+    today = today or date.today()
+    reasons = []
+    if bis > today:
+        reasons.append(f"er endet in der Zukunft ({bis.strftime('%m/%Y')})")
+    years = [int(y) for n in (prior_names or []) for y in re.findall(r"(?<!\d)(20\d\d)(?!\d)", n)]
+    if years:
+        y = max(years)
+        if von.year > y or bis.year > y + 1:
+            reasons.append(f"das Vorjahresmanuskript stammt aus {y}, dazu passt ein Zeitraum etwa von {y} bis {y + 1}")
+    if not reasons:
+        return ""
+    return (f"Bitte den Suchzeitraum prüfen ({von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}): "
+            + "; ".join(reasons) + ".")
 
 
 def with_manual(plan: dict, manual: str) -> dict:

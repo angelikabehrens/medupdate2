@@ -17,7 +17,7 @@ from datetime import date
 
 import streamlit as st
 
-from medupdate import appraisal as A, pipeline, prior, selection_sheet, toc_merge
+from medupdate import appraisal as A, pipeline, prior, recommend, selection_sheet, toc_merge
 from medupdate.config import APP_VERSION, secret
 from medupdate.files import extract_text
 from medupdate.llm import LLM
@@ -303,6 +303,9 @@ with st.form("step1"):
 if proj.get("search_window"):
     _w = [date.fromisoformat(x) for x in proj["search_window"]]
     st.caption(f"📅 Suchzeitraum manuell: {_w[0].strftime('%m-%Y')} bis {_w[1].strftime('%m-%Y')}")
+    _ww = recommend.window_warning(proj["search_window"], (proj.get("prior") or {}).get("names"))
+    if _ww:
+        st.warning("⚠️ " + _ww + " Ändern Sie ihn über „📅 Suchzeitraum“ und starten Sie die Literatursuche neu.")
 
 if go1:
     llm = get_llm()
@@ -401,6 +404,43 @@ if proj.get("toc"):
             pipeline.apply_prior(proj)
             pipeline.fit_to_length(proj)
             st.rerun()
+    if any(t.get("ranking") for t in proj["topics"].values()):
+        _foc = bool(proj.get("focus_conservative"))
+        _foc_new = st.checkbox(
+            "Interventionelle Studien abwerten (nur, wenn es zu diesem Thema ein eigenes interventionelles Kapitel gibt)",
+            value=_foc, key="focus_conservative", disabled=_running,
+            help="Studien zu Katheter, Stent, Ballon, Bypass, Thrombektomie oder Devices werden dann nicht mehr "
+                 "empfohlen und stehen nur noch in der Reserve. Sinnvoll z. B. für „pAVK konservativ“, wenn "
+                 "„pAVK interventionell“ ein eigenes Kapitel ist. Die Einordnung kostet einmalig wenige Cent.")
+        if _foc_new != _foc:
+            proj["focus_conservative"] = _foc_new
+            _flm = get_llm() if _foc_new and pipeline.invasive_pending(proj) else None
+            if _foc_new and pipeline.invasive_pending(proj) and not _flm:
+                proj["focus_conservative"] = False
+            else:
+                def _refocus(log):
+                    if _flm:
+                        pipeline.classify_invasive(_flm, proj, log)
+                    pipeline.select_chapter(proj, log)
+                    pipeline.fit_to_length(proj, log)
+                run_with_status("Auswahl wird angepasst", _refocus, _flm)
+        _ext = pipeline.extension_pending(proj)
+        if _ext["widen"] or _ext["followup"]:
+            _parts = []
+            if _ext["widen"]:
+                _parts.append(f"{len(_ext['widen'])} Themen mit vielen Treffern: 100 statt 60 Kandidaten")
+            if _ext["followup"]:
+                _parts.append(f"Nachsuche nach Folgepublikationen zu {_ext['followup']} guten Studien")
+            _usd = 0.5 * len(_ext["widen"]) + (0.5 if _ext["followup"] else 0)
+            _ec1, _ec2 = st.columns([3, 1])
+            _ec1.caption("🔁 Erweiterte Suche verfügbar: " + "; ".join(_parts) + ". Bereits bewertete Arbeiten "
+                         "werden nicht erneut bewertet.")
+            if _ec2.button(f"Suche erweitern (ca. {max(_usd, 0.5):.0f}–{max(_usd * 2, 1):.0f} USD)",
+                           key="extend_search", disabled=_running):
+                _elm = get_llm()
+                if _elm:
+                    run_with_status("Suche wird erweitert", lambda log: pipeline.run_recommendations(_elm, proj, log),
+                                    _elm)
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")

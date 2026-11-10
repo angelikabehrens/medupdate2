@@ -757,3 +757,25 @@ Zahlen, kein Gendern, nichts behaupten, was nicht in den Textanfängen steht.
 
 Publikationen:
 {its}"""
+
+
+def invasive_prompt(chapter: str, pubs_block: str) -> str:
+    return f"""Für das Handbuchkapitel „{chapter}“ sollen Studien zu interventionellen oder operativen \
+Verfahren erkannt werden. Gib für jede Publikation an, ob ihre Hauptfragestellung ein invasives Verfahren \
+untersucht: Katheterintervention, Ballon, Stent, Atherektomie, Bypass oder andere Operation, Thrombektomie, \
+kathetergesteuerte Lyse, Amputation als Therapie, Ergebnisse nach einer Revaskularisation oder ein Device.
+Nicht invasiv sind Studien zu Medikamenten (auch nach einer Revaskularisation, wenn das Medikament die \
+Fragestellung ist), Lebensstil, Training, Diagnostik, Epidemiologie, Risikofaktoren und Versorgung.
+
+Publikationen:
+{pubs_block}"""
+
+
+def trial_names_prompt(pubs_block: str) -> str:
+    return f"""Nenne für jede Publikation den Namen bzw. das Akronym der klinischen Studie oder des Registers, \
+aus dem sie stammt (z. B. BEST-CLI, BASIL-2, SWEDEPAD 2, VOYAGER PAD, API-CAT), so wie er in PubMed im Titel \
+oder Abstract steht. Gibt es keinen eindeutigen Studiennamen, gib "" zurück. Erfinde keine Namen und nenne \
+keine allgemeinen Abkürzungen (z. B. RCT, PAD, VTE, DOAC, LDL).
+
+Publikationen:
+{pubs_block}"""

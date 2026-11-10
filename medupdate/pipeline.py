@@ -29,7 +29,7 @@ from .config import APP_VERSION, MAX_CANDIDATES_PER_TOPIC, MAX_PUBS_PER_TOPIC, M
 from .files import extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
-from .llm import LLM, STR, AccountError, arr, enum, obj
+from .llm import BOOL, LLM, STR, AccountError, arr, enum, obj
 from .manuscript import build_docx, build_recommendation_docx
 from .docx_tools import build_pruefprotokoll_docx
 from .references import make_formatter
@@ -310,6 +310,18 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
         raise
     except Exception as ex:
         _err(proj, "Bewertung im passenden Thema", ex)
+    try:
+        run_followup(llm, proj, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Nachsuche nach Folgepublikationen", ex)
+    try:
+        classify_invasive(llm, proj, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Einordnung interventioneller Studien", ex)
     apply_prior(proj, log, reselect=False)
     select_chapter(proj, log)
 
@@ -494,8 +506,9 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
     target = target_count(proj)[0] or n_topic * len(topics)
     best = _best_topics(proj)
     primary = {p: v for p, v in best.items() if v[1].get("is_primary_research", True)}
+    inv = invasive_set(proj)  # Schalter „Interventionelle Studien abwerten“: nur noch Reserve
     eligible = [p for p, (_, it) in primary.items() if it.get("relevance", 0) >= recommend.RELEVANCE_MIN
-                and (it.get("priority") == "A" or it.get("score", 0) >= CHAPTER_MIN_SCORE)]
+                and (it.get("priority") == "A" or it.get("score", 0) >= CHAPTER_MIN_SCORE) and p not in inv]
     eligible.sort(key=lambda p: (primary[p][1].get("priority") == "A", primary[p][1].get("score", 0),
                                  primary[p][1].get("length_score", 0)), reverse=True)
     rec: dict[str, list[str]] = {tid: [] for tid, _ in topics}
@@ -515,7 +528,8 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
         rk = t.get("ranking") or {}
         mine = sorted(rec[tid], key=lambda p: (rk[p].get("length_score", 0), rk[p].get("score", 0)), reverse=True)
         own = [p for p, (b, _) in primary.items() if b == tid and p not in taken]
-        own.sort(key=lambda p: (rk[p].get("priority") in ("A", "B"), rk[p].get("score", 0)), reverse=True)
+        own.sort(key=lambda p: (p not in inv, rk[p].get("priority") in ("A", "B"), rk[p].get("score", 0)),
+                 reverse=True)
         reserve = [p for p in own if rk[p].get("priority") in ("A", "B")
                    and rk[p].get("relevance", 0) >= recommend.RELEVANCE_MIN]
         for p in own:
@@ -538,7 +552,164 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
     n_rec = len(taken)
     n_a = sum(1 for p in taken if primary[p][1].get("priority") == "A")
     log(f"Kapitelweite Auswahl: {n_rec} von {target} Empfehlungen ({n_a} mit Priorität A, die übrigen nach "
-        f"Score), Reserve und Hintergrundliteratur je Thema aktualisiert.")
+        f"Score), Reserve und Hintergrundliteratur je Thema aktualisiert."
+        + (f" {len(inv)} interventionelle Arbeit(en) stehen nur in der Reserve." if inv else ""))
+
+
+INVASIVE_SCHEMA = obj({"items": arr(obj({"key": STR, "invasive": BOOL}))})
+TRIAL_SCHEMA = obj({"items": arr(obj({"key": STR, "trial": STR}))})
+FOLLOWUP_PER_TRIAL = 15  # PubMed-Treffer je Studienname
+FOLLOWUP_MAX = 60        # so viele neue Folgepublikationen höchstens bewerten
+FOLLOWUP_MIN_SCORE = 60  # Ausgangsarbeiten: Priorität A oder Score ab 60
+
+
+def invasive_set(proj: dict) -> set[str]:
+    """Arbeiten, die bei eingeschaltetem Schalter „Interventionelle Studien abwerten“ nicht empfohlen werden."""
+    if not proj.get("focus_conservative"):
+        return set()
+    return {p for p, v in (proj.get("invasive") or {}).items() if v}
+
+
+def invasive_pending(proj: dict) -> list[str]:
+    """Arbeiten, die für die Auswahlliste in Frage kommen und noch nicht als interventionell/nicht
+    interventionell eingeordnet sind."""
+    done = proj.get("invasive") or {}
+    return [p for p, (_, it) in _best_topics(proj).items() if p not in done and p in proj["records"]
+            and it.get("is_primary_research", True) and it.get("relevance", 0) >= SHEET_MIN_RELEVANCE]
+
+
+def classify_invasive(llm: LLM, proj: dict, log=lambda m: None) -> int:
+    """Nur bei eingeschaltetem Schalter: ordnet die in Frage kommenden Arbeiten als interventionell oder
+    nicht interventionell ein (schnelles Modell, 40 Arbeiten je Anfrage, Ergebnis je Arbeit gemerkt).
+    Angelika 2026-11-10: nur sinnvoll, wenn es zum Thema ein eigenes interventionelles Kapitel gibt."""
+    if not proj.get("focus_conservative"):
+        return 0
+    todo = invasive_pending(proj)
+    if not todo:
+        return 0
+    log(f"{len(todo)} Arbeiten werden als interventionell oder konservativ eingeordnet…")
+    chapter = (proj.get("toc") or {}).get("chapter_title", "")
+    out = proj.setdefault("invasive", {})
+    for i in range(0, len(todo), 40):
+        part = todo[i:i + 40]
+        block = "\n".join(f"{p}: {proj['records'][p].get('title', '')} – "
+                           f"{' '.join((proj['records'][p].get('abstract') or '').split())[:400]}" for p in part)
+        data = llm.json(P.invasive_prompt(chapter, block), INVASIVE_SCHEMA, model=MODEL_FAST,
+                        max_tokens=4000, effort="low")
+        out.update({a["key"]: bool(a.get("invasive")) for a in data.get("items", []) if a.get("key") in part})
+    n = sum(1 for p in todo if out.get(p))
+    log(f"{n} von {len(todo)} Arbeiten sind interventionell.")
+    return n
+
+
+def _followup_seeds(proj: dict) -> list[str]:
+    seeds = []
+    for p, (_, it) in _best_topics(proj).items():
+        if p in proj["records"] and it.get("is_primary_research", True) \
+                and (it.get("priority") == "A" or it.get("score", 0) >= FOLLOWUP_MIN_SCORE):
+            seeds.append(p)
+    return seeds
+
+
+def followup_pending(proj: dict) -> int:
+    """Zahl der guten Arbeiten, deren Studienname noch nicht nachgesucht wurde."""
+    fu = proj.get("followup") or {}
+    if fu.get("window") != list(proj.get("search_window") or proj.get("plan_window") or []):
+        fu = {}
+    seen = set(fu.get("seeds") or {})
+    return sum(1 for p in _followup_seeds(proj) if p not in seen)
+
+
+def run_followup(llm: LLM, proj: dict, log) -> None:
+    """Nachsuche nach Folgepublikationen großer Studien (Angelika 2026-11-10, nach dem Vergleich pAVK
+    interventionell): Für gute Originalarbeiten wird der Studienname bestimmt (z. B. BEST-CLI, BASIL-2) und
+    im Suchzeitraum in PubMed gesucht. Neue Treffer werden dem passendsten Thema zugeordnet und dort bewertet."""
+    topics = _search_topics(proj)
+    if not topics:
+        return
+    valid = {tid for tid, _ in topics}
+    win = list(proj.get("search_window") or proj.get("plan_window") or [])
+    fu = proj.get("followup") or {}
+    if fu.get("window") != win:
+        fu = {"window": win, "seeds": {}, "trials": {}}
+    proj["followup"] = fu
+    seeds = [p for p in _followup_seeds(proj) if p not in fu["seeds"]]
+    for i in range(0, len(seeds), 40):
+        part = seeds[i:i + 40]
+        block = "\n".join(f"{p}: {proj['records'][p].get('title', '')} – "
+                           f"{' '.join((proj['records'][p].get('abstract') or '').split())[:500]}" for p in part)
+        data = llm.json(P.trial_names_prompt(block), TRIAL_SCHEMA, model=MODEL_FAST, max_tokens=4000, effort="low")
+        names = {a["key"]: (a.get("trial") or "").strip() for a in data.get("items", []) if a.get("key") in part}
+        for p in part:
+            fu["seeds"][p] = names.get(p, "")
+    rules = proj.get("rules") or {}
+    von, bis = recommend.search_window(rules, proj.get("search_window"))
+    suffix = recommend._suffix(von, bis)
+    for name in sorted({n for n in fu["seeds"].values() if len(n) >= 3}):
+        if name in fu["trials"]:
+            continue
+        q = name.replace('"', "")
+        try:
+            ids, _ = pubmed.search(f'("{q}"[tiab]){suffix}', FOLLOWUP_PER_TRIAL, proj["email"])
+        except Exception as ex:  # ein fehlerhafter Name soll die Nachsuche nicht abbrechen
+            _err(proj, f"Nachsuche {name}", ex)
+            continue
+        fu["trials"][name] = ids
+    ranked = {p for _, t in topics for p in (t.get("ranking") or {})} | \
+             {p for _, t in topics for p in (t.get("prior_excluded") or {})}
+    new = list(dict.fromkeys(p for ids in fu["trials"].values() for p in ids if p not in ranked))[:FOLLOWUP_MAX]
+    if not new:
+        log(f"Nachsuche nach Folgepublikationen: {len(fu['trials'])} Studiennamen, keine neuen Arbeiten.")
+        return
+    records = pubmed.fetch_records(new, proj["email"])
+    cands = [r["pmid"] for r in recommend.prefilter([records[p] for p in new if p in records])]
+    if not cands:
+        return
+    log(f"Nachsuche nach Folgepublikationen: {len(cands)} neue Arbeiten zu {len(fu['trials'])} Studien "
+        f"werden zugeordnet und bewertet…")
+    proj["records"].update({p: records[p] for p in cands})
+    topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
+    assign: dict[str, str] = {}
+    for i in range(0, len(cands), 40):
+        part = cands[i:i + 40]
+        pubs_block = "\n".join(f"{p}: {records[p].get('title', '')} – "
+                                f"{' '.join((records[p].get('abstract') or '').split())[:400]}" for p in part)
+        data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, model=MODEL_FAST,
+                        max_tokens=4000, effort="low")
+        assign.update({a["key"]: a["topic_id"] for a in data.get("assignments", []) if a.get("key") in part})
+    by_topic: dict[str, list[str]] = {}
+    for p in cands:
+        tid = assign.get(p, "")
+        if tid in valid:
+            by_topic.setdefault(tid, []).append(p)
+    period = f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}"
+
+    def work(item):
+        tid, pmids = item
+        t = proj["topics"][tid]
+        return recommend.rank(llm, t, (t.get("plan") or {}).get("pico", ""), [records[p] for p in pmids], period)
+
+    res = _parallel([(tid, (tid, pm)) for tid, pm in by_topic.items()], work, log, "Bewertung der Folgepublikationen")
+    n = 0
+    for tid, items in res.items():
+        if isinstance(items, Exception):
+            _err(proj, f"Bewertung der Folgepublikationen {proj['topics'][tid]['title']}", items)
+            continue
+        for p, it in items.items():
+            proj["topics"][tid].setdefault("ranking", {})[p] = {**it, "via": "Folgepublikation"}
+            proj.setdefault("reroute", {})[p] = tid  # nicht noch einmal umsortieren
+            fu["seeds"][p] = next((nm for nm, ids in fu["trials"].items() if p in ids), "")  # schon nachgesucht
+            n += 1
+    log(f"{n} Folgepublikationen bewertet.")
+
+
+def extension_pending(proj: dict) -> dict:
+    """Was ein erneutes „Literatur bewerten“ in einem schon bewerteten Projekt nachholen würde."""
+    widen = [tid for tid, t in _search_topics(proj) if "recommended" in t and t.get("searchable") is not False
+             and t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
+             and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15]
+    return {"widen": widen, "followup": followup_pending(proj) if any(t.get("ranking") for _, t in
+                                                                       _search_topics(proj)) else 0}
 
 
 def run_reroute(llm: LLM, proj: dict, log) -> None:

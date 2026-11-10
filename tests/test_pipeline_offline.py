@@ -974,7 +974,8 @@ def test_chapter_selection():
     assert len(calls) == 1
     # Kandidatenzahl bei breiten Themen
     assert recommend.candidate_limit({"breit": 17959, "praezise": 400}) == recommend.BROAD_CANDIDATES
-    assert recommend.candidate_limit({"praezise": 400, "x": "Fehler"}) == 60
+    assert recommend.candidate_limit({"praezise": 100, "breit": 900, "x": "Fehler"}) == 60
+    assert recommend.candidate_limit({"praezise": 248, "breit": 292}) == recommend.BROAD_CANDIDATES
     # Titelabgleich nur mit Erstautor in der Nähe; Warnung beim aktuellen Jahrgang
     pr = prior.build_prior({"8 pAVK Angio Update 2026.pdf": "Samuel M, Berry C. Long-term trials of colchicine "
                             "for secondary prevention of vascular events: a meta-analysis. Eur Heart J 2025."})
@@ -986,6 +987,74 @@ def test_chapter_selection():
     assert "Vorjahres" in prior.warning(pr, 1, ["2025-03-01", "2026-03-31"])
     assert prior.warning(pr, 1, ["2026-03-01", "2027-03-31"]) == ""
     assert "16 der" in prior.warning(pr, 16, ["2026-03-01", "2027-03-31"])
+
+
+def test_focus_followup_window():
+    """Angelika 2026-11-10 (Validierung an drei Kapiteln): Schalter „Interventionelle Studien abwerten“,
+    Nachsuche nach Folgepublikationen großer Studien, Warnung beim Suchzeitraum."""
+    from datetime import date
+    def it(rel, ev, imp, key=""):
+        return {"relevance": rel, "evidence": ev, "practice_impact": imp, "novelty": 60, "risk_of_bias": "Low",
+                "question_importance": 70, "journal_impact_factor": 5, "is_primary_research": True,
+                "question_key": key, "study_design": "RCT", "rationale": "r"}
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "pAVK konservativ"}
+    proj["email"] = "x@example.org"
+    proj["search_window"] = ["2025-03-01", "2026-03-31"]
+    proj["topics"] = {"T1": {"id": "T1", "title": "Prognose", "number": "8.1", "ranking": {
+        "1": it(90, 90, 80, "a"), "2": it(88, 85, 80, "b"), "3": it(80, 60, 50, "c")}}}
+    proj["records"] = {p: {"pmid": p, "title": f"Titel {p}", "authors": ["Muster A"], "abstract": "x " * 200,
+                           "journal": "J", "year": "2025", "pub_types": [], "language": "eng"} for p in "123"}
+    calls = []
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema.get("properties", {})
+            calls.append(prompt[:30])
+            if "assignments" in props:
+                return {"assignments": [{"key": "9", "topic_id": "T1"}]}
+            sub = props.get("items", {}).get("items", {}).get("properties", {})
+            if "invasive" in sub:
+                return {"items": [{"key": "2", "invasive": True}, {"key": "1", "invasive": False},
+                                  {"key": "3", "invasive": False}]}
+            if "trial" in sub:
+                return {"items": [{"key": "1", "trial": "BEST-CLI"}, {"key": "2", "trial": ""}]}
+            return {"items": [{**it(85, 70, 60, "d"), "pmid": "9"}]}
+    # Schalter aus: nichts eingeordnet, Arbeit 2 empfohlen
+    assert pipeline.classify_invasive(L(), proj) == 0 and not calls
+    pipeline.select_chapter(proj)
+    assert "2" in proj["topics"]["T1"]["recommended"]
+    proj["focus_conservative"] = True
+    assert pipeline.classify_invasive(L(), proj) == 1
+    pipeline.select_chapter(proj)
+    t = proj["topics"]["T1"]
+    assert "2" not in t["recommended"] and "2" in t["reserve"] and t["reserve"][-1] == "2", (t["recommended"], t["reserve"])
+    n = len(calls)
+    assert pipeline.classify_invasive(L(), proj) == 0 and len(calls) == n  # gemerkt
+    # Nachsuche: Studienname -> PubMed -> neue Arbeit 9 wird zugeordnet und bewertet
+    old_search, old_fetch = pipeline.pubmed.search, pipeline.pubmed.fetch_records
+    searched = []
+    pipeline.pubmed.search = lambda q, n, e="": (searched.append(q) or (["9", "1"], 2))
+    pipeline.pubmed.fetch_records = lambda ids, e="": {"9": {"pmid": "9", "title": "BEST-CLI follow-up",
+        "authors": ["Neu B"], "abstract": "y " * 200, "journal": "J", "year": "2025", "pub_types": [],
+        "language": "eng"}}
+    try:
+        assert pipeline.followup_pending(proj) == 3
+        pipeline.run_followup(L(), proj, lambda *a: None)
+        assert '"BEST-CLI"[tiab]' in searched[0] and len(searched) == 1
+        assert t["ranking"]["9"]["via"] == "Folgepublikation" and "9" in proj["records"]
+        assert pipeline.followup_pending(proj) == 0
+        n = len(calls)
+        pipeline.run_followup(L(), proj, lambda *a: None)  # nichts Neues: keine KI-Kosten
+        assert len(calls) == n and len(searched) == 1
+    finally:
+        pipeline.pubmed.search, pipeline.pubmed.fetch_records = old_search, old_fetch
+    # Warnung beim Suchzeitraum
+    today = date(2026, 11, 10)
+    assert recommend.window_warning(["2025-03-01", "2026-03-31"], ["15 VTE 2025.pdf"], today) == ""
+    assert "Zukunft" in recommend.window_warning(["2025-11-01", "2026-11-30"], ["15 VTE 2025.pdf"], today)
+    assert "2025" in recommend.window_warning(["2026-03-01", "2027-03-31"], ["15 VTE 2025.pdf"], date(2027, 6, 1))
+    assert recommend.window_warning(None, ["x 2025.pdf"], today) == ""
 
 
 def test_toc_merge():
@@ -1071,6 +1140,7 @@ if __name__ == "__main__":
     test_guideline_needs()
     test_toc_merge()
     test_chapter_selection()
+    test_focus_followup_window()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()
     test_full_pipeline()
