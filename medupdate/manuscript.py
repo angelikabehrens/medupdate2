@@ -83,7 +83,8 @@ def build_docx(title: str, blocks: list[dict], lang: str) -> bytes:
             toc_lines.append((1, *b["section"]))
         if b.get("subsection"):
             toc_lines.append((2, *b["subsection"]))
-        if b.get("number"):
+        # Höchstens drei Gliederungsebenen auf Seite 1 (z.B. 5.1.2); tiefere nur als Überschrift im Text
+        if b.get("number") and str(b["number"]).strip(".").count(".") < 3:
             toc_lines.append((b.get("level") or 2, b["number"], b["topic"]))
     if toc_lines:
         p = doc.add_paragraph()

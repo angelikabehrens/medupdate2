@@ -94,6 +94,9 @@ class FakeLLM:
                 return {"groups": [{"pub_ids": ids[:2], "question_de": "Zwei Techniken im Vergleich",
                                     "question_en": "Two techniques compared"}]}
             return {"groups": []}
+        if "headings" in props:
+            ids = re.findall(r"^(\d+): ", p, re.M)
+            return {"headings": [{"id": i, "de": f"Schlagwort {i}", "en": f"Keyword {i}"} for i in ids]}
         if "comment_de" in props:
             assert "vier Bausteinen" in p and "KEINE Literaturziffern" in p
             return {"comment_de": "Gemeinsam zeigen beide Studien ein konsistentes Bild. Für die klinische Praxis "
@@ -260,9 +263,10 @@ def test_full_pipeline(monkeypatch=None):
     toc = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name in ("Toc1", "Toc2")]
     print("GLIEDERUNG", toc)
     expected = [("Toc1", "8.1\tAbschnitt"), ("Toc2", "8.1.1\tThema Eins"), ("Toc2", "8.1.2\tThema Zwei"),
-                ("Toc1", "8.2\tDritter Abschnitt"), ("Toc2", "8.2.1\tThema Vier"), ("Toc1", "8.3\tVaria")]
-    assert toc[:6] == expected, "Inhaltsverzeichnis auf Seite 1, leerer Abschnitt entfernt und neu nummeriert"
-    assert toc[6:] == expected, "gleiche Nummern als Überschriften im Text"
+                ("Toc1", "8.2\tDritter Abschnitt"), ("Toc2", "8.2.1\tThema Vier"), ("Toc1", "8.3\tVaria"),
+                ("Toc2", "8.3.1\tSchlagwort 0")]  # Varia: Schlagwort-Überschrift je Arbeit (2026-11-13)
+    assert toc[:7] == expected, "Inhaltsverzeichnis auf Seite 1, leerer Abschnitt entfernt und neu nummeriert"
+    assert toc[7:] == expected, "gleiche Nummern als Überschriften im Text"
     assert not any("Leerer Abschnitt" in t or "Thema Drei" in t for _, t in toc)
     texts = [p.text for p in doc.paragraphs]
     assert texts.index("8.1\tAbschnitt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
@@ -504,8 +508,10 @@ def test_outline_levels():
                 ("Toc1", "8.2\tAbschnitt 8.2"), ("Toc2", "8.2.1\tUnter 8.2.7"),
                 ("Toc3", "8.2.1.1\tVarizen A"), ("Toc3", "8.2.1.2\tVarizen B"),
                 ("Toc2", "8.2.2\tUnter 8.2.8"), ("Toc3", "8.2.2.1\tEinzeln")]
-    assert toc[:8] == expected, toc
-    assert toc[8:] == expected, toc
+    # Inhaltsverzeichnis auf Seite 1: höchstens drei Ebenen (Entscheidung 2026-11-13); im Text alle Ebenen
+    page1 = [e for e in expected if e[1].split("\t")[0].count(".") < 3]
+    assert toc[:len(page1)] == page1, toc
+    assert toc[len(page1):] == expected, toc
     texts = [p.text for p in out.paragraphs]
     i = texts.index("8.1.1\tDirekt")
     assert texts[i + 1] == "" and texts[i + 2] == "8.2\tAbschnitt 8.2", "Leerzeile zwischen Hauptabschnitten"
@@ -1119,8 +1125,42 @@ def test_toc_merge():
     assert "2 HOT TOPIC: HANDBESCHWERDEN – DIFFERENTIALDIAGNOSEN" in t and "Chen SP" not in t and "22 Jahren" not in t
 
 
+
+def test_final_toc_rules():
+    """Entscheidungen der Autorin 2026-11-13: Neue Themen vor Varia am Ende, Schlagwort-Überschrift je
+    Arbeit (gleiche Fragestellung = gleiche Überschrift), höchstens drei Ebenen im Inhaltsverzeichnis."""
+    proj = {"topics": {"VARIA": {"title": "Varia"}, "A": {"title": "A"}, "NEU": {"title": "Neu", "safety": True},
+                       "B": {"title": "B"}}, "pubs": {}, "records": {"1": {"title": "GLP-1 before EGD"},
+                       "2": {"title": "Holding GLP-1"}, "3": {"title": "AI quality EGD"}}}
+    assert pipeline.topic_order(proj) == ["A", "B", "NEU", "VARIA"]
+
+    class L:
+        calls = 0
+        def json(self, prompt, schema, **kw):
+            L.calls += 1
+            assert "headings" in schema["properties"] and "GENAU dieselbe" in prompt
+            h = {"0": "GLP-1-Agonisten vor der ÖGD", "1": "KI in der ÖGD", "2": "GLP-1-Agonisten vor der ÖGD"}
+            return {"headings": [{"id": i, "de": d, "en": d} for i, d in h.items()]}
+    g = pipeline.keyword_headings(L(), proj, "VARIA", ["1", "3", "2"])
+    assert [x[0] for x in g] == ["GLP-1-Agonisten vor der ÖGD", "KI in der ÖGD"] and g[0][2] == ["1", "2"]
+    pipeline.keyword_headings(L(), proj, "VARIA", ["1", "3", "2"])
+    assert L.calls == 1  # Cache
+
+    from medupdate.manuscript import build_docx
+    from docx import Document
+    import io
+    blocks = [{"topic": "Thema tief", "section": ("5.1", "Ösophagus"), "subsection": ("5.1.2", "Barrett"),
+               "number": "5.1.2.1", "level": 3, "pubs": []},
+              {"topic": "Thema flach", "section": None, "subsection": None, "number": "5.1.3", "level": 2, "pubs": []}]
+    doc = Document(io.BytesIO(build_docx("Kapitel", blocks, "Deutsch")))
+    texts = [p.text for p in doc.paragraphs]
+    toc = texts[texts.index("Inhaltsverzeichnis"):texts.index("Inhaltsverzeichnis") + 6]
+    assert "5.1.2\tBarrett" in toc and "5.1.3\tThema flach" in toc and not any(t.startswith("5.1.2.1") for t in toc)
+    assert any("Thema tief" in t for t in texts)  # im Text weiterhin vorhanden
+
 if __name__ == "__main__":
     test_fazit_and_headings()
+    test_final_toc_rules()
     test_direct_upload()
     test_enforce_pub_limit()
     test_reassign_topics()

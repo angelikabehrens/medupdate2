@@ -1001,6 +1001,13 @@ def attach_direct_upload(proj: dict, p: str, name: str, data: bytes, force: bool
 VARIA = "VARIA"
 
 
+def topic_order(proj: dict) -> list[str]:
+    """Themen in Manuskript-Reihenfolge: wie im (kumulativen) Inhaltsverzeichnis, danach „Neue Themen“
+    (Sicherheitsnetz) und ganz am Ende „Varia“ (Entscheidung der Autorin 2026-11-13)."""
+    tail = [t for t in (SAFETY, VARIA) if t in proj["topics"]]
+    return [t for t in proj["topics"] if t not in tail] + tail
+
+
 def ensure_varia(proj: dict) -> None:
     """Hochgeladene Publikationen, die zu keinem Thema des Inhaltsverzeichnisses passen, kommen unter
     den Inhaltspunkt „Varia“ (eigener, letzter Abschnitt ohne Literaturrecherche und ohne State of the Art)."""
@@ -1372,7 +1379,8 @@ def assignment_overview(proj: dict) -> list[dict]:
     cur = current_topics(proj)
     group_of = {p: g for g in proj.get("question_groups", []) for p in g["pmids"]}
     out, last_sec = [], None
-    for tid, t in proj["topics"].items():
+    for tid in topic_order(proj):
+        t = proj["topics"][tid]
         if not t.get("enabled", True):
             continue
         sec = (t.get("section_number", ""), t.get("section_title", ""))
@@ -1430,7 +1438,8 @@ def assignment_docx(proj: dict) -> bytes:
 def _pub_list(proj: dict) -> list[tuple[str, str]]:
     """[(pmid, topic_id)] in Manuskript-Reihenfolge: Themen wie im Inhaltsverzeichnis, darin nach Score."""
     out, seen = [], set()
-    for tid, t in proj["topics"].items():
+    for tid in topic_order(proj):
+        t = proj["topics"][tid]
         if not t.get("enabled", True):
             continue
         # Eine Publikation steht nur einmal im Manuskript (z.B. nach Verschieben in ein anderes Thema)
@@ -1636,7 +1645,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
 
     # 6. State of the Art: einer je Hauptabschnitt, vor dem Thema mit der hochwertigsten Publikation
     # (bei Gleichstand: mit den meisten Publikationen)
-    topic_ids = [t for t in proj["topics"] if any(tt == t for _, tt in ready)]
+    topic_ids = [t for t in topic_order(proj) if any(tt == t for _, tt in ready)]
     counts = {t: sum(len(proj["pubs"][p].get("group") or [p]) for p, tt in ready if tt == t) for t in topic_ids}
     best_q = {t: max((recommend.quality(_rank_item(proj, p, t)) for p, tt in ready if tt == t),
                      default=0.0) for t in topic_ids}
@@ -1758,6 +1767,17 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     except Exception as ex:
         _err(proj, "Übersetzung der Überschriften", ex)
         de = {}
+    kw = {}
+    for tid in (SAFETY, VARIA):
+        if tid in topic_ids:
+            ids = [p for p, tt in ready if tt == tid]
+            try:
+                kw[tid] = keyword_headings(llm, proj, tid, ids)
+            except AccountError:
+                raise
+            except Exception as ex:
+                _err(proj, "Schlagwort-Überschriften", ex)
+                kw[tid] = [("Weitere Publikationen", "Further publications", ids)]
     for lang in ("Deutsch", "Englisch"):
         blocks = []
         key_refs = []  # Hauptquellen der ausführlich gewürdigten Publikationen: fett im Literaturverzeichnis
@@ -1774,9 +1794,22 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
             block = {"topic": tr(t["title"]), "sota": sota_block, "pubs": [], **g,
                      "comment": (t.get("topic_comment") or {}).get(lk) if options.get("topic_comment", True) else None}
             transitions = (t.get("transitions") or {}).get("items", {}) if options.get("transitions", True) else {}
+            sub_blocks = None
+            if tid in kw:  # „Neue Themen“ / „Varia“: Hauptabschnitt mit je einer Schlagwort-Überschrift
+                sec_num = (g.get("section") or (g.get("number") or "", ""))[0]
+                sec_title = ("Neue Themen" if lang == "Deutsch" else "New topics") if tid == SAFETY else "Varia"
+                sub_blocks = []
+                for k, (h_de, h_en, ids) in enumerate(kw[tid], start=1):
+                    sub_blocks.append({"topic": h_de if lang == "Deutsch" else h_en, "sota": None, "pubs": [],
+                                       "comment": None, "section": (sec_num, sec_title) if k == 1 else None,
+                                       "subsection": None, "number": f"{sec_num}.{k}" if sec_num else None,
+                                       "level": 2, "_ids": ids})
+                transitions = {}
             for p, tt in ready:
                 if tt != tid:
                     continue
+                if sub_blocks is not None:
+                    block = next(b for b in sub_blocks if p in b["_ids"])
                 d, rec = proj["pubs"][p], proj["records"].get(p, {})
                 if lang == "Deutsch":
                     text = d.get("styled_de") or d.get("short_de") or d["short_en"]
@@ -1802,7 +1835,12 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
                                       "literature": lit,
                                       "kurz": proj["tiers"].get(p) == "Kurznachricht",
                                       "figure": None})
-            blocks.append(block)
+            if sub_blocks is not None:
+                for b in sub_blocks:
+                    b.pop("_ids", None)
+                    blocks.append(b)
+            else:
+                blocks.append(block)
         raw = build_docx(tr(title), blocks, lang)
         key = "DE" if lang == "Deutsch" else "EN"
         try:
@@ -1952,7 +1990,7 @@ def vary_fazit_openings(llm: LLM, proj: dict, ready: list[tuple[str, str]], log)
 HEADINGS_SCHEMA = obj({"items": arr(obj({"id": STR, "de": STR}))})
 
 
-HEADINGS_VERSION = 2  # 2: deutsche Überschrift nach dem tatsächlichen Inhalt der Publikationen
+HEADINGS_VERSION = 3  # 2: nach dem Inhalt der Publikationen; 3: deutsche Überschriften der Autoren bleiben wörtlich
 
 
 def headings_de(llm: LLM, proj: dict, topic_ids: list[str]) -> dict[str, str]:
@@ -1969,6 +2007,8 @@ def headings_de(llm: LLM, proj: dict, topic_ids: list[str]) -> dict[str, str]:
     if chapter.strip():
         ctx[chapter] = {"level": "Kapitel", "focus": "", "pubs": []}
     for tid in topic_ids:
+        if tid in (SAFETY, VARIA):  # eigene Schlagwort-Überschriften je Arbeit (keyword_headings)
+            continue
         t = proj["topics"][tid]
         pubs = by_topic.get(tid, [])
         for level, src, focus in (("Abschnitt (x.x)", t.get("section_title") or "", ""),
@@ -2003,6 +2043,46 @@ def headings_de(llm: LLM, proj: dict, topic_ids: list[str]) -> dict[str, str]:
     return new
 
 
+KEYWORD_SCHEMA = obj({"headings": arr(obj({"id": STR, "de": STR, "en": STR}))})
+KEYWORD_VERSION = 1
+
+
+def keyword_headings(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[tuple[str, str, list[str]]]:
+    """„Neue Themen“ und „Varia“: jede Arbeit erhält eine eigene Überschrift mit ihrem Schlagwort/Thema;
+    Arbeiten zur selben Fragestellung teilen sich eine (Entscheidung der Autorin 2026-11-13).
+    Rückgabe [(Überschrift deutsch, englisch, [pmids])] in der Reihenfolge der ersten Arbeit."""
+    if not pmids:
+        return []
+    key = [f"v{KEYWORD_VERSION}"] + sorted(pmids)
+    t = proj["topics"][tid]
+    cache = t.get("keyword_headings") or {}
+    if cache.get("for") != key:
+        lines = []
+        for i, p in enumerate(pmids):
+            d, rec = proj["pubs"].get(p, {}), proj["records"].get(p, {})
+            title = d.get("title_en") or rec.get("title") or p
+            q = (t.get("ranking", {}).get(p) or {}).get("question_key") or ""
+            lines.append(f"{i}: {title[:220]}" + (f"\n   Fragestellung: {q}" if q else ""))
+        res = llm.json(P.keyword_headings_prompt("\n".join(lines)), KEYWORD_SCHEMA, model=MODEL_FAST,
+                       max_tokens=3000, effort="low")
+        items = {}
+        for it in res.get("headings", []):
+            try:
+                p = pmids[int(it.get("id", ""))]
+            except (ValueError, IndexError):
+                continue
+            if (it.get("de") or "").strip():
+                items[p] = [it["de"].strip(), (it.get("en") or it["de"]).strip()]
+        cache = {"for": key, "items": items}
+        t["keyword_headings"] = cache
+    groups: dict[str, list] = {}
+    for p in pmids:
+        de, en = cache["items"].get(p) or [proj["records"].get(p, {}).get("title", p)[:80]] * 2
+        g = groups.setdefault(de.lower(), [de, en, []])
+        g[2].append(p)
+    return [tuple(g) for g in groups.values()]
+
+
 def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
     """Gliederung nach dem hochgeladenen Inhaltsverzeichnis, aber nur mit Themen, zu denen Publikationen
     im Manuskript stehen; Hauptabschnitte, Unterabschnitte und Themen werden fortlaufend neu nummeriert.
@@ -2015,7 +2095,7 @@ def outline(proj: dict, topic_ids: list[str]) -> dict[str, dict]:
     sections: dict[str, dict[str, list[str]]] = {}
     titles: dict[str, str] = {}
     sub_titles: dict[tuple[str, str], str] = {}
-    for tid in proj["topics"]:
+    for tid in topic_order(proj):
         if tid not in topic_ids:
             continue
         t = proj["topics"][tid]
@@ -2206,7 +2286,7 @@ def topic_comments(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> N
         short = [p for p in ids if proj["tiers"].get(p) in SHORT_TIERS and proj["pubs"][p].get("short_en")]
         has_long = any(proj["tiers"].get(p) in LONG_TIERS for p in ids)
         t = proj["topics"][tid]
-        if not (2 <= len(short) <= 4) or has_long or t.get("varia"):
+        if not (2 <= len(short) <= 4) or has_long or t.get("varia") or t.get("safety") or tid in (VARIA, SAFETY):
             t.pop("topic_comment", None)
             continue
         key = [SHORT_VERSION] + [(p, _text_sig(proj["pubs"][p].get("short_en"))) for p in short]

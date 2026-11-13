@@ -309,6 +309,10 @@ NICHT wörtlich, sondern wähle den deutschen Fachbegriff, unter dem ein deutsch
 Thema der darunter besprochenen Publikationen führen würde.
 
 Regeln:
+- VORRANG: Ist eine Vorlage bereits eine deutsche Fachüberschrift der Autoren (deutsch formuliert, \
+nicht aus Suchbegriffen zusammengesetzt), gib sie WÖRTLICH unverändert zurück, auch wenn du sie anders \
+formulieren würdest. Neu formuliert werden nur englische Vorlagen und aus Suchbegriffen \
+zusammengesetzte Vorlagen (Kommas, „and“/„und“ zwischen Stichworten).
 - Maßgeblich ist, worum es in den besprochenen Publikationen tatsächlich geht. Behandeln sie z.B. \
 ausschließlich therapeutische Eingriffe, sagt die Überschrift das („endoscopic ultrasound and bile \
 duct“ → „Therapeutische Endosonographie am Gallengang“). Beispiele: „screening for gastric cancer“ → \
@@ -324,6 +328,21 @@ Klammern, wie in deutschen Fachbüchern üblich.
 - Erfinde keinen Schwerpunkt, den die Publikationen nicht tragen. Ohne Publikationen: fachgerecht \
 übersetzen. Ist eine Überschrift schon deutsch und passend, gib sie unverändert zurück.
 - "id" ist die Nummer vor dem Doppelpunkt, "de" die deutsche Überschrift.
+
+{items}"""
+
+
+def keyword_headings_prompt(items: str) -> str:
+    return f"""Ein medizinisches Fortbildungshandbuch hat am Ende die Abschnitte „Neue Themen“ bzw. „Varia“. \
+Dort erhält jede besprochene Arbeit eine eigene kurze Überschrift mit ihrem Schlagwort bzw. Thema, wie \
+eine Themenüberschrift im Inhaltsverzeichnis (z.B. „GLP-1-Rezeptoragonisten vor der Gastroskopie“, \
+„KI-gestützte Qualitätskontrolle der ÖGD“).
+
+Regeln:
+- Knapp (meist 2–6 Wörter), deutscher Fachbegriff, übliche Groß- und Kleinschreibung; etablierte \
+Abkürzungen dürfen bleiben. Kein Studienname, keine Ergebnisse, kein Satz.
+- Arbeiten zur selben klinischen Fragestellung bekommen GENAU dieselbe Überschrift.
+- "id" ist die Nummer vor dem Doppelpunkt, "de" die deutsche, "en" die englische Überschrift.
 
 {items}"""
 
