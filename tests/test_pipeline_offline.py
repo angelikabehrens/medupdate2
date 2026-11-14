@@ -979,7 +979,8 @@ def test_chapter_selection():
     pipeline.run_reroute(L(), proj, lambda *a: None)  # gemerkt: kein zweiter Aufruf
     assert len(calls) == 1
     # Kandidatenzahl bei breiten Themen
-    assert recommend.candidate_limit({"breit": 17959, "praezise": 400}) == recommend.BROAD_CANDIDATES
+    assert recommend.candidate_limit({"breit": 17959, "praezise": 400}) == recommend.HUGE_CANDIDATES
+    assert recommend.candidate_limit({"breit": 17959, "praezise": 300}) == recommend.BROAD_CANDIDATES
     assert recommend.candidate_limit({"praezise": 100, "breit": 900, "x": "Fehler"}) == 60
     assert recommend.candidate_limit({"praezise": 248, "breit": 292}) == recommend.BROAD_CANDIDATES
     # Titelabgleich nur mit Erstautor in der Nähe; Warnung beim aktuellen Jahrgang
@@ -993,6 +994,57 @@ def test_chapter_selection():
     assert "Vorjahres" in prior.warning(pr, 1, ["2025-03-01", "2026-03-31"])
     assert prior.warning(pr, 1, ["2026-03-01", "2027-03-31"]) == ""
     assert "16 der" in prior.warning(pr, 16, ["2026-03-01", "2027-03-31"])
+
+
+def test_huge_topics_evidence_first():
+    """Angelika 2026-11-14 (Vergleiche Psoriasis und Atopie): mehr als 300 präzise Treffer → bis zu 300
+    Kandidaten, Treffer der präzisen Suche mit hoher Evidenz zuerst; kleinere Themen unverändert; ein schon
+    bewertetes Thema mit 100 Kandidaten bewertet beim Erweitern nur die neuen."""
+    searched = []
+
+    def fake_search(q, retmax, email=""):
+        searched.append((q, retmax))
+        if "registry[tiab]" in q:
+            return [f"E{i}" for i in range(min(retmax, 250))], 250
+        tag = "P" if q.startswith("(PRAEZ") else "B"
+        n = 900 if tag == "P" else 3000
+        return [f"{tag}{i}" for i in range(min(retmax, n))], n
+
+    def rec(p):
+        return {"pmid": p, "title": f"T {p}", "abstract": "a" * 400, "pub_types": [], "language": "eng"}
+
+    orig = (pubmed.search, pubmed.fetch_records)
+    pubmed.search = fake_search
+    pubmed.fetch_records = lambda ids, email="": {i: rec(i) for i in ids}
+    try:
+        plan = {"pico": "p", "queries": [{"name": "praezise", "query": "PRAEZ"}, {"name": "breit", "query": "BREIT"}]}
+        prep = recommend.prepare_topic(None, {"title": "Systemtherapie"}, "Atopie", {}, "", plan=plan,
+                                       window=["2025-07-01", "2026-10-31"])
+        assert prep["limit"] == 300 and prep["evidence_hits"] == 250
+        ids = [c["pmid"] for c in prep["new"]]
+        assert len(ids) == 300 and ids[:200] == [f"E{i}" for i in range(200)] and "E200" not in ids
+        assert ids[200:202] == ["P0", "B0"]  # danach wie bisher im Reißverschluss
+        assert any("registry[tiab]" in q and q.startswith("((PRAEZ") for q, _ in searched)
+        # Erweitern eines alten Themas (100 Kandidaten): nur die neuen werden bewertet
+        known = {p: {"x": 1} for p in ids[200:300]}
+        prep2 = recommend.prepare_topic(None, {"title": "Systemtherapie"}, "Atopie", {}, "", plan=plan,
+                                        window=["2025-07-01", "2026-10-31"], known=known)
+        assert len(prep2["new"]) == 200
+        # Thema mit 200 präzisen Treffern: 100 Kandidaten, keine Evidenzsuche
+        searched.clear()
+        pubmed.search = lambda q, n, e="": ([f"X{i}" for i in range(min(n, 200))], 200)
+        prep3 = recommend.prepare_topic(None, {"title": "Klein"}, "Atopie", {}, "", plan=plan,
+                                        window=["2025-07-01", "2026-10-31"])
+        assert prep3["limit"] == 100 and prep3["evidence_hits"] is None and len(prep3["new"]) == 100
+        # Projekt mit altem 100er-Thema: „Suche erweitern“ wird angeboten
+        proj = pipeline.new_project()
+        proj["topics"] = {"T1": {"id": "T1", "title": "Sys", "recommended": [], "cand_limit": 100,
+                                 "n_candidates": 97, "query_hits": {"praezise": 1237, "breit": 2138}},
+                          "T2": {"id": "T2", "title": "Klein", "recommended": [], "cand_limit": 100,
+                                 "n_candidates": 95, "query_hits": {"praezise": 250, "breit": 600}}}
+        assert pipeline.extension_pending(proj)["widen"] == ["T1"]
+    finally:
+        pubmed.search, pubmed.fetch_records = orig
 
 
 def test_focus_followup_window():
@@ -1180,6 +1232,7 @@ if __name__ == "__main__":
     test_guideline_needs()
     test_toc_merge()
     test_chapter_selection()
+    test_huge_topics_evidence_first()
     test_focus_followup_window()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()

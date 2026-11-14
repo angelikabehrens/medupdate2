@@ -273,7 +273,7 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
         return ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
                 or t.get("plan_rev", 0) != t.get("ranked_rev", 0) or rank_failed(t))
 
-    def widen(t):  # breites Thema mit bisher 60 Kandidaten: nur die zusätzlichen Kandidaten bewerten
+    def widen(t):  # Thema mit bisher weniger Kandidaten als heute vorgesehen: nur die zusätzlichen bewerten
         return (t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
                 and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15)
 

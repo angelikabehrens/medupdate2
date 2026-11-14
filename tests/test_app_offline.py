@@ -176,11 +176,11 @@ def test_app_step1_savings():
         at = bench.open(proj)
         assert any(e.label.startswith("🔎 Suchplan prüfen – 4 Themen, 4 noch nicht bewertet") for e in at.expander)
         go = at.button(key="plan_go")
-        assert "1,6–3,2 USD" in go.label and not go.disabled, go.label
+        assert "2,6–4,6 USD" in go.label and not go.disabled, go.label
         at.checkbox(key="batch_step1_plan_0").check().run()
         _ok(at)
         go = at.button(key="plan_go")
-        assert "1,1–2,1 USD" in go.label, "im Sparmodus etwa ein Drittel weniger"
+        assert "1,7–3,1 USD" in go.label, "im Sparmodus etwa ein Drittel weniger"
         assert _run_job(at, go) == ["Literatur wird bewertet – fertig."]
         assert proj["batch_step1"] is True and not proj["errors"], proj["errors"]
         reqs = bench.srv.batches["msgbatch_001"]["requests"]
@@ -189,6 +189,17 @@ def test_app_step1_savings():
                    if tid.startswith("T"))
         assert at.button(key="plan_go").disabled, "nichts mehr offen"
         assert at.checkbox(key="batch_step1_plan_1").value is True
+        # Sehr großes Thema aus einem älteren Lauf (100 Kandidaten): „Suche erweitern“ im Sparmodus
+        t0 = proj["topics"][next(iter(proj["topics"]))]
+        saved = {k: t0.get(k) for k in ("cand_limit", "n_candidates", "query_hits")}
+        t0.update({"cand_limit": 100, "n_candidates": 97, "query_hits": {"praezise": 1237, "breit": 2138}})
+        at.run()
+        _ok(at)
+        ext = at.button(key="extend_search")
+        assert "ca. 1–2 USD, Sparmodus" in ext.label and not ext.disabled, ext.label
+        assert any("bis zu 200 zusätzliche Kandidaten, hohe Evidenz zuerst" in c.value for c in at.caption)
+        t0.update(saved)
+        at.run()
 
         # Eine geänderte Suche öffnet das Thema wieder; „Literatursuche starten“ übernimmt den Sparmodus
         first = next(iter(proj["topics"]))

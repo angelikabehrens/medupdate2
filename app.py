@@ -29,6 +29,7 @@ LEAN_TEST_BUDGET_USD = 12.0
 # Sparmodus in Schritt 1: Bewertung der Suchtreffer und Leitliniensuche zum halben Preis, der Rest unverändert –
 # zusammen etwa ein Drittel weniger (Schätzung nach der Kostenprüfung vom 13.11.2026, noch nicht gemessen)
 STEP1_BATCH_FACTOR = 0.67
+RANK_USD = 0.012  # Bewertung eines Suchtreffers im direkten Aufruf (gemessen 11/2026: 0,008–0,017 USD)
 
 
 def usd(value: float) -> str:
@@ -477,19 +478,28 @@ if proj.get("toc"):
         _ext = pipeline.extension_pending(proj)
         if _ext["widen"] or _ext["followup"]:
             _parts = []
+            _extra = 0
             if _ext["widen"]:
-                _parts.append(f"{len(_ext['widen'])} Themen mit vielen Treffern: 100 statt 60 Kandidaten")
+                _wt = [proj["topics"][tid] for tid in _ext["widen"]]
+                _extra = sum(max(recommend.candidate_limit(t.get("query_hits")) - t.get("cand_limit", 60), 0)
+                             for t in _wt)
+                _parts.append(f"{len(_wt)} Themen mit vielen Treffern: bis zu {_extra} zusätzliche Kandidaten, "
+                              "hohe Evidenz zuerst")
             if _ext["followup"]:
                 _parts.append(f"Nachsuche nach Folgepublikationen zu {_ext['followup']} guten Studien")
-            _usd = 0.5 * len(_ext["widen"]) + (0.5 if _ext["followup"] else 0)
+            _bx = bool(proj.get("batch_step1"))
+            _usd = (_extra * RANK_USD * (0.5 if _bx else 1.0) + (0.5 if _ext["followup"] else 0))
             _ec1, _ec2 = st.columns([3, 1])
             _ec1.caption("🔁 Erweiterte Suche verfügbar: " + "; ".join(_parts) + ". Bereits bewertete Arbeiten "
                          "werden nicht erneut bewertet.")
-            if _ec2.button(f"Suche erweitern (ca. {max(_usd, 0.5):.0f}–{max(_usd * 2, 1):.0f} USD)",
-                           key="extend_search", disabled=_running):
+            _ec1.caption("Der Sparmodus aus der Literatursuche gilt auch hier." if _bx else
+                         "Mit dem Sparmodus (Häkchen bei der Literatursuche) kostet das etwa die Hälfte.")
+            if _ec2.button(f"Suche erweitern (ca. {max(_usd, 0.5):.0f}–{max(_usd * 1.5, 1):.0f} USD"
+                           + (", Sparmodus)" if _bx else ")"), key="extend_search", disabled=_running):
                 _elm = get_llm()
                 if _elm:
-                    run_with_status("Suche wird erweitert", lambda log: pipeline.run_recommendations(_elm, proj, log),
+                    run_with_status("Suche wird erweitert",
+                                    lambda log, _b=_bx: pipeline.run_recommendations(_elm, proj, log, batch=_b),
                                     _elm)
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
@@ -563,10 +573,14 @@ if proj.get("toc"):
                                     lambda log: pipeline.run_search_plan(_plm, proj, log), _plm)
             _n = max(len(_pending), 1)
             _f1 = STEP1_BATCH_FACTOR if _b1 else 1.0
-            _dec = 0 if _n >= 10 else 1
+            # je Thema: Bewertung der Kandidaten (Zahl nach den Trefferzahlen) plus Leitlinienrecherche
+            # (ein Teil der Kandidaten fällt vorher heraus, z.B. ohne Abstract: daher 0,75)
+            _lo = sum(recommend.candidate_limit(proj["topics"][tid].get("plan_counts")) * RANK_USD * 0.75 + 0.1
+                      for tid in _pending) * _f1 or 0.4 * _f1
+            _dec = 0 if _lo >= 10 else 1
             if p2.button("✅ Literatur bewerten und Leitlinien recherchieren (ca. "
-                         f"{f'{0.4 * _n * _f1:.{_dec}f}'.replace('.', ',')}–"
-                         f"{f'{0.8 * _n * _f1:.{_dec}f}'.replace('.', ',')} USD)",
+                         f"{f'{_lo:.{_dec}f}'.replace('.', ',')}–"
+                         f"{f'{_lo * 1.8:.{_dec}f}'.replace('.', ',')} USD)",
                          disabled=_running or not _pending, key="plan_go", type="primary"):
                 _plm = get_llm()
                 if _plm:

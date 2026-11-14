@@ -155,15 +155,25 @@ MIN_CANDIDATES = 8
 BROAD_HITS = 1000          # ab so vielen Treffern einer Suchstrategie gilt ein Thema als breit
 BROAD_CANDIDATES = 100     # breite Themen: so viele Kandidaten bewerten (sonst MAX_CANDIDATES_PER_TOPIC)
 PRECISE_HITS = 150         # ab so vielen Treffern der präzisen Suche ebenfalls 100 Kandidaten
+HUGE_PRECISE_HITS = 300    # mehr Treffer der präzisen Suche: sehr großes Thema
+HUGE_CANDIDATES = 300      # sehr große Themen: so viele Kandidaten bewerten
+EVIDENCE_FIRST_MAX = 200   # davon höchstens so viele aus der vorgezogenen Suche nach hoher Evidenz
+EVIDENCE_FIRST = ("(randomized controlled trial[pt] OR meta-analysis[pt] OR systematic[sb] OR "
+                  "clinical trial, phase ii[pt] OR clinical trial, phase iii[pt] OR registry[tiab] OR "
+                  "registries[tiab] OR register[tiab])")
 
 
 def candidate_limit(counts: dict | None) -> int:
     """Wie viele Kandidaten ein Thema bewertet (Angelika 2026-11-09: bei sehr breiten Suchen mehr als 60,
     damit Epidemiologie- und Lebensstilthemen nicht an der Kandidatenzahl scheitern; 2026-11-10 nach dem
-    Vergleich pAVK interventionell: auch, wenn schon die präzise Suche mehr als 150 Treffer liefert)."""
+    Vergleich pAVK interventionell: auch, wenn schon die präzise Suche mehr als 150 Treffer liefert).
+    Angelika 2026-11-14 nach den Vergleichen Psoriasis und Atopie: mehr als 300 Treffer der präzisen Suche
+    → bis zu 300 Kandidaten, randomisierte Studien, Metaanalysen und Register zuerst (evidence_first)."""
     counts = counts or {}
     nums = [v for v in counts.values() if isinstance(v, int)]
     precise = counts.get("praezise")
+    if isinstance(precise, int) and precise > HUGE_PRECISE_HITS:
+        return HUGE_CANDIDATES
     if (nums and max(nums) > BROAD_HITS) or (isinstance(precise, int) and precise >= PRECISE_HITS):
         return BROAD_CANDIDATES
     return MAX_CANDIDATES_PER_TOPIC
@@ -175,6 +185,22 @@ def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
                     PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000)
     data["pico"] = plan.get("pico") or data.get("pico", "")
     return data
+
+
+def evidence_first(plan: dict, pmids: list[str], von: date, bis: date, email: str,
+                   limit: int) -> tuple[list[str], int | str | None]:
+    """Sehr große Themen: Die Treffer der präzisen Suche mit hoher Evidenz (randomisierte Studien,
+    Metaanalysen, Phase-II/III-Studien, Register) kommen vor alle anderen Kandidaten. Sonst stünden große
+    Studien wie REZOLVE-AD oder Registerarbeiten unter 1.000 Treffern oft hinter Platz 100 (Vergleich Atopie
+    2026-11-14). Gibt (Kandidaten, Trefferzahl der Evidenzsuche) zurück; ohne präzise Suche unverändert."""
+    precise = next((q.get("query") or "" for q in plan.get("queries", []) if q.get("name") == "praezise"), "")
+    if not precise.strip():
+        return pmids[:limit], None
+    try:
+        ids, count = pubmed.search(f"(({precise}) AND {EVIDENCE_FIRST}){_suffix(von, bis)}", EVIDENCE_FIRST_MAX, email)
+    except Exception as ex:  # ohne Evidenzsuche bleibt es bei der bisherigen Reihenfolge
+        return pmids[:limit], f"Fehler: {ex}"
+    return list(dict.fromkeys(ids[:EVIDENCE_FIRST_MAX] + pmids))[:limit], count
 
 
 def collect_candidates(plan: dict, von: date, bis: date, email: str,
@@ -392,8 +418,11 @@ def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, 
         plan = plan_search(llm, topic, chapter, von, bis, frame)
     plan = with_manual(plan, topic.get("manual_query", ""))
     log(f"PubMed-Suche für „{topic['title']}“…")
-    pmids, stats = collect_candidates(plan, von, bis, email, limit=BROAD_CANDIDATES)
+    pmids, stats = collect_candidates(plan, von, bis, email, limit=HUGE_CANDIDATES)
     limit = limit or candidate_limit(stats)  # Trefferzahlen entscheiden, ob das Thema breit ist
+    evidence_hits = None
+    if limit > BROAD_CANDIDATES:
+        pmids, evidence_hits = evidence_first(plan, pmids, von, bis, email, limit)
     pmids = pmids[:limit]
     attempts = [{"window": [von.isoformat(), bis.isoformat()], "queries": plan.get("queries", []), "hits": stats}]
     if len(pmids) < MIN_CANDIDATES:
@@ -423,7 +452,7 @@ def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, 
     new = [c for c in candidates if c["pmid"] not in known]
     if known:
         log(f"{len(candidates) - len(new)} Kandidaten für „{topic['title']}“ sind schon bewertet, {len(new)} neu.")
-    return {"limit": limit, "plan": plan, "window": [von.isoformat(), bis.isoformat()], "stats": stats,
+    return {"limit": limit, "evidence_hits": evidence_hits, "plan": plan, "window": [von.isoformat(), bis.isoformat()], "stats": stats,
             "attempts": attempts, "records": records, "n_candidates": len(candidates), "known": known, "new": new,
             "period": period}
 
@@ -436,7 +465,7 @@ def finish_topic(prep: dict, rated: dict[str, dict], n_max: int) -> dict:
     chosen, backup = select(ranking, n_max)
     records = prep["records"]
     return {
-        "cand_limit": prep["limit"],
+        "cand_limit": prep["limit"], "evidence_hits": prep.get("evidence_hits"),
         "plan": prep["plan"], "window": prep["window"], "query_hits": prep["stats"], "attempts": prep["attempts"],
         "n_candidates": prep["n_candidates"], "ranking": ranking, "recommended": chosen, "reserve": backup,
         "records": {p: records[p] for p in set(chosen) | set(backup) | set(ranking) if p in records},
