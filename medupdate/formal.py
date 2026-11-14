@@ -3,6 +3,7 @@ Hinweisen für Autoren statt fest eingetragen)."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 from datetime import date
@@ -87,6 +88,9 @@ def _apply_bold_refs(doc: Document, nums: list[int]) -> None:
     note.add_run("In bold: key studies of this chapter." if english
                  else "Fett gedruckt: Schlüsselstudien dieses Kapitels.").italic = True
     paras[lit]._element.addnext(note._element)
+
+
+_FORMAL_VERSION = "f1"  # höher setzen, wenn sich die Prüfvorgabe unten ändert
 
 
 def run_formal_check_ai(full_text: str, llm) -> list[dict]:
@@ -204,7 +208,46 @@ oder danach.
     return corrected_map, unreturned
 
 
-def fix_spelling_and_grammar(doc: Document, llm) -> int:
+# ---------- Merkfunktion für das erneute Erstellen (Sparmaßnahme 2026-11-13) ----------
+# Beim erneuten Erstellen des Manuskripts sind die meisten Textstellen unverändert. Ihr Prüfergebnis steht im
+# Projekt (proj["build_cache"]) und wird übernommen; an die KI gehen nur neue oder geänderte Textstellen.
+SPELL_CACHE_MAX = 6000
+_SPELL_VERSION = "s1"  # höher setzen, wenn sich die Korrekturvorgabe ändert
+_NUM_PREFIX_RE = re.compile(r"^(\s*)(\d+)(\.\s)")
+
+
+def _spell_norm(text: str) -> tuple[str, list[str]]:
+    """Textstelle ohne ihre laufenden Nummern: Literaturziffern wie „(12)“ und die Nummer am Anfang eines
+    Literatureintrags ändern sich, sobald im Manuskript eine Publikation hinzukommt oder wegfällt. Rückgabe:
+    (Text mit Platzhaltern, die ersetzten Stellen in ihrer Reihenfolge)."""
+    marks: list[str] = []
+
+    def keep(m: re.Match) -> str:
+        marks.append(m.group(0))
+        return f"\u27e6{len(marks)}\u27e7"
+
+    def keep_prefix(m: re.Match) -> str:
+        marks.append(m.group(2))
+        return f"{m.group(1)}\u27e6{len(marks)}\u27e7{m.group(3)}"
+
+    norm = _NUM_PREFIX_RE.sub(keep_prefix, text, count=1)
+    norm = _CITE_RE.sub(keep, norm)
+    return norm, marks
+
+
+def _spell_restore(norm: str, marks: list[str]) -> str | None:
+    """Setzt die aktuellen Nummern wieder ein; None, wenn die Platzhalter nicht genau passen."""
+    found = re.findall(r"\u27e6(\d+)\u27e7", norm)
+    if found != [str(i) for i in range(1, len(marks) + 1)]:
+        return None
+    return re.sub(r"\u27e6(\d+)\u27e7", lambda m: marks[int(m.group(1)) - 1], norm)
+
+
+def _spell_key(norm: str) -> str:
+    return hashlib.sha1(f"{_SPELL_VERSION}|{norm}".encode("utf-8")).hexdigest()[:16]
+
+
+def fix_spelling_and_grammar(doc: Document, llm, cache: dict | None = None) -> int:
     """Korrigiert Rechtschreib- und Grammatikfehler DIREKT im Dokument. Arbeitet auf
     Ebene einzelner Text-Runs (nicht ganzer Absätze), damit bestehende Formatierung
     (z.B. fette Labels) und die Absatzstruktur unangetastet bleiben. Verändert
@@ -215,7 +258,10 @@ def fix_spelling_and_grammar(doc: Document, llm) -> int:
     werden erkannt (Token-Limit) und nie übernommen; jede Korrektur wird auf Plausibilität geprüft
     (keine nennenswerte Kürzung, kein verlorenes Satzende, keine geänderten Zahlen); nicht
     gelieferte Abschnitte werden erneut verarbeitet und bleiben im Zweifel UNVERÄNDERT.
-    Gibt die Anzahl der tatsächlich geänderten Textstellen zurück."""
+    Gibt die Anzahl der tatsächlich geänderten Textstellen zurück.
+
+    cache (optional, {Schlüssel: korrigierte Fassung oder "" für „geprüft, fehlerfrei“}): bereits geprüfte
+    Textstellen werden übernommen statt erneut an die KI geschickt (siehe _spell_norm)."""
     if llm is None:
         return 0
 
@@ -229,6 +275,40 @@ def fix_spelling_and_grammar(doc: Document, llm) -> int:
 
     if not texts:
         return 0
+
+    changed = 0
+    known: set[int] = set()
+    norms = [_spell_norm(t) for t in texts] if cache is not None else []
+    if cache is not None:
+        for i, (norm, marks) in enumerate(norms):
+            key = _spell_key(norm)
+            if key not in cache:
+                continue
+            fixed = cache.pop(key)
+            cache[key] = fixed  # zuletzt benutzt: ans Ende (die ältesten fallen bei SPELL_CACHE_MAX zuerst weg)
+            if fixed:
+                restored = _spell_restore(fixed, marks)
+                if restored is None or not _plausible_correction(texts[i], restored):
+                    continue  # passt nicht mehr: neu prüfen lassen
+                if restored != texts[i]:
+                    run_refs[i].text = restored
+                    changed += 1
+            known.add(i)
+
+    def remember(i: int, corrected: str) -> None:
+        """Ergebnis für die nächste Erstellung merken – nur, wenn die Nummern unverändert geblieben sind."""
+        if cache is None:
+            return
+        norm, marks = norms[i]
+        if corrected == texts[i]:
+            cache[_spell_key(norm)] = ""
+        else:
+            c_norm, c_marks = _spell_norm(corrected)
+            if c_marks != marks:
+                return
+            cache[_spell_key(norm)] = c_norm
+        while len(cache) > SPELL_CACHE_MAX:
+            cache.pop(next(iter(cache)))
 
     max_chars_per_batch = 2500
 
@@ -246,13 +326,14 @@ def fix_spelling_and_grammar(doc: Document, llm) -> int:
             out.append(cur)
         return out
 
-    changed = 0
-    pending = list(range(len(texts)))
+    pending = [i for i in range(len(texts)) if i not in known]
     for _round in range(3):  # erste Runde + bis zu zwei Nachbearbeitungen nicht gelieferter Abschnitte
         next_pending: list[int] = []
         for batch_indices in make_batches(pending):
             corrected_map, unreturned = _fix_spelling_batch([texts[i] for i in batch_indices], llm)
             for local_idx, orig_idx in enumerate(batch_indices):
+                if local_idx in corrected_map:
+                    remember(orig_idx, corrected_map[local_idx])
                 if local_idx in corrected_map and corrected_map[local_idx] != texts[orig_idx]:
                     run_refs[orig_idx].text = corrected_map[local_idx]
                     changed += 1
@@ -265,7 +346,8 @@ def fix_spelling_and_grammar(doc: Document, llm) -> int:
 
 
 def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None, rules: dict | None = None,
-                     format_references=None, bold_refs: list[str] | None = None) -> tuple[list[dict], bytes]:
+                     format_references=None, bold_refs: list[str] | None = None,
+                     cache: dict | None = None) -> tuple[list[dict], bytes]:
     """Führt die formale Prüfung des hochgeladenen (vom Nutzer überarbeiteten)
     Gesamtmanuskripts durch. Führt dabei zunächst alle publikationslokalen
     Literaturlisten zu einer gemeinsamen, fortlaufend nummerierten Liste am
@@ -278,7 +360,10 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     der korrigierte Inhalt anschließend in diese eingefügt – die Vorlage bestimmt dann
     Seitenformat, Ränder und Formatvorlagen; die hauseigene Arial-Vereinheitlichung
     entfällt in diesem Fall, damit die Schriftart der Vorlage nicht überschrieben wird.
-    Gibt die Befunde UND die korrigierte Datei als Bytes zurück."""
+    Gibt die Befunde UND die korrigierte Datei als Bytes zurück.
+
+    cache (optional): proj["build_cache"] – merkt sich geprüfte Textstellen ("spell") und das Ergebnis der
+    KI-gestützten Prüfung eines unveränderten Manuskripts ("formal") für das erneute Erstellen."""
     rules = rules or {}
     doc = Document(io.BytesIO(docx_bytes))
     consolidate_literature_globally(doc)
@@ -307,7 +392,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
                     p.add_run(f"{num}. {new_text}")
     _apply_bold_refs(doc, bold_nums)
     n_format_fixed = 0 if template_bytes else fix_formatting(doc)
-    n_spelling_fixed = fix_spelling_and_grammar(doc, llm)
+    n_spelling_fixed = fix_spelling_and_grammar(doc, llm, cache.setdefault("spell", {}) if cache is not None else None)
 
     if template_bytes:
         search_terms = []
@@ -489,7 +574,17 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
 
     if llm is not None and full_text.strip():
         try:
-            befunde.extend(run_formal_check_ai(full_text, llm))
+            formal_cache = cache.setdefault("formal", {}) if cache is not None else None
+            key = hashlib.sha1(f"{_FORMAL_VERSION}|{full_text}".encode("utf-8")).hexdigest()[:16]
+            if formal_cache is not None and key in formal_cache:
+                ai = formal_cache[key]  # unverändertes Manuskript: Ergebnis der letzten Prüfung
+            else:
+                ai = run_formal_check_ai(full_text, llm)
+                if formal_cache is not None:
+                    formal_cache[key] = ai
+                    while len(formal_cache) > 4:
+                        formal_cache.pop(next(iter(formal_cache)))
+            befunde.extend(dict(b) for b in ai)
         except Exception as ex:
             befunde.append({
                 "punkt": "KI-gestützte Sprach-/Regelprüfung",

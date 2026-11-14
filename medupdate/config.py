@@ -6,7 +6,7 @@ import streamlit as st
 # MODEL_MAIN: anspruchsvolle Schritte (kritische Würdigung, State of the Art, Literaturauswahl).
 # MODEL_FAST: Massenarbeit mit klarer Vorgabe (Übersetzung, Rechtschreibung, Extraktion).
 # Stand des Programms, in der Seitenleiste angezeigt (bei jeder Änderung hochzählen)
-APP_VERSION = "2026-11-13.1"
+APP_VERSION = "2026-11-14.1"
 
 MODEL_MAIN = "claude-opus-5-5"
 MODEL_FAST = "claude-sonnet-5-5"
@@ -22,6 +22,8 @@ PRICES = {
     MODEL_FAST: {"input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.10},
 }
 PRICE_PER_WEB_SEARCH = 0.01
+# Sammelaufträge (Message Batches API): halber Preis auf alle Token, die Gebühr je Websuche bleibt
+BATCH_PRICE_FACTOR = 0.5
 
 # Literaturempfehlung: so viele PubMed-Kandidaten pro Thema werden höchstens bewertet
 MAX_CANDIDATES_PER_TOPIC = 60

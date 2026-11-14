@@ -4,6 +4,8 @@ Die Inhalte (Leitfrage, Grundregeln, Zitierpflicht, Kürzungsregeln des Skills
 "studien-wuerdigung", State of the Art, Stilanpassung) sind die in MyLuo erarbeiteten und
 erprobten Fassungen. Änderungen an der inhaltlichen Logik bitte hier vornehmen."""
 
+import re
+
 # fmt: off
 
 
@@ -440,6 +442,120 @@ Jede wesentliche Kritik muss deshalb eine erkennbare Verbindung zwischen methodi
 
 Eine Limitation ist nicht allein deshalb relevant, weil sie existiert. Entscheidend ist, ob und in welchem Ausmaß sie die Validität, Präzision, Interpretation, Generalisierbarkeit oder klinische Bedeutung der Ergebnisse beeinflusst."""
     return prompt
+
+
+# ---------- Schlanke Würdigung als Grundlage einer Kurznachricht (Sparmaßnahme 2026-11-13) ----------
+# Sie übernimmt Grundregeln, die Vorgaben der Abschnitte 1–3, Qualitätskontrolle, Stil und Schlussprinzip
+# WORTGLEICH aus der vollständigen Vorgabe oben (per Ausschnitt, damit spätere Änderungen dort automatisch
+# auch hier gelten). Es entfallen Websuche, Leitlinien, Abschnitt 4 und 5, Kommentar, Fazit für die Praxis und
+# Literatur – also genau die Teile, deren Inhalt in einer Kurznachricht nicht vorkommen darf.
+
+_LEAN_VOLLTEXT_HINWEIS = (
+    "Nutze den Volltext vorrangig für die methodische und statistische Bewertung. "
+    "Prüfe insbesondere Studiendesign, Population, Endpunkte, Randomisierung bzw. "
+    "Auswahlmechanismen, Verblindung, Fallzahlplanung, statistische Analyse, Umgang "
+    "mit fehlenden Daten, Follow-up, Protokollabweichungen, Finanzierung, "
+    "Interessenkonflikte und vom Abstract nicht erfasste Limitationen. Bei "
+    "Abweichungen zwischen Abstract und Volltext ist der Volltext maßgeblich; "
+    "benenne die Abweichung."
+)
+# Prüfpunkte der vollständigen Vorgabe, die sich auf entfallende Teile beziehen (Neuheit, externe Quellen, Fazit
+# für die Praxis)
+_LEAN_QC_DROPPED = ("Wurde die tatsächliche Neuigkeit", "Wurden externe Aussagen",
+                    "Beantwortet das Fazit für die Praxis")
+_lean_parts_cache: dict = {}
+
+
+def _lean_parts() -> dict:
+    """Unveränderte Bausteine der vollständigen Würdigungsvorgabe (aus einer Vorlage ohne Publikationsdaten)."""
+    if _lean_parts_cache:
+        return _lean_parts_cache
+    dummy = {"title": "", "journal": "", "pubdate": "", "pub_types": [], "abstract": "", "full_text": ""}
+    full = appraisal_prompt(dummy, "Deutsch", "", "", max_websuchen=0)
+
+    def between(start: str, end: str | None) -> str:
+        a = full.index(start)
+        return full[a:full.index(end, a)] if end else full[a:]
+
+    qc = between("ALLGEMEINE QUALITÄTSKONTROLLE VOR DER AUSGABE\n", "FORMATIERUNG\n")
+    head, items = qc.split("Prüfe insbesondere:\n\n", 1)
+    kept = [re.sub(r"^\d+\.\s*", "", line) for line in items.strip().split("\n")
+            if line.strip() and not any(d in line for d in _LEAN_QC_DROPPED)]
+    kept.insert(len(kept) - 1, "Nennt das Fazit das Ergebnis zum primären Endpunkt, und geht es nicht über das "
+                               "hinaus, was die Daten tragen?")
+    _lean_parts_cache.update({
+        "rules": between("GRUNDREGELN DER WISSENSCHAFTLICHEN BEWERTUNG\n", "ABLAUF\n"),
+        "sections": between("1. Stärken der Studie\n\nBewerte", "4. Einordnung in den wissenschaftlichen Gesamtkontext\n\nNutze"),
+        "qc": head + "Prüfe insbesondere:\n\n" + "\n".join(f"{i}. {x}" for i, x in enumerate(kept, start=1)) + "\n\n",
+        "qc_dropped": len(items.strip().split("\n")) - (len(kept) - 1),
+        "style": between("STIL\n\nSchreibe", None),
+    })
+    return _lean_parts_cache
+
+
+def lean_appraisal_prompt(entry: dict, sprache_kw: str, fulltext_block: str) -> str:
+    parts = _lean_parts()
+    sprach_hinweis = (
+        "WICHTIG: Schreibe deine GESAMTE Antwort auf Englisch, inklusive aller Abschnittsüberschriften. "
+        "Verwende dabei exakt diese Übersetzungen der Überschriften: "
+        "'1. Stärken der Studie' -> '1. Strengths of the Study', "
+        "'2. Schwächen und Limitationen' -> '2. Weaknesses and Limitations', "
+        "'3. Prüfung der Schlussfolgerungen der Autoren' -> '3. Examination of the Authors' Conclusions', "
+        "'Fazit' -> 'Conclusion'. "
+        "Alle inhaltlichen Anweisungen unten bleiben unverändert gültig, nur die Ausgabesprache ändert sich."
+        if sprache_kw == "Englisch"
+        else "Schreibe deine gesamte Antwort auf Deutsch, wie unten mit den deutschen Überschriften vorgegeben."
+    )
+    volltext_hinweis = _LEAN_VOLLTEXT_HINWEIS if entry.get("full_text") else ""
+    return f"""Du bist ein erfahrener klinisch-wissenschaftlicher Experte und verfasst eine wissenschaftlich präzise, methodisch fundierte und kritisch ausgewogene Würdigung einer wissenschaftlichen Publikation für ein medizinisches Fortbildungshandbuch (med update). Die Zielgruppe besteht aus Fachärztinnen und Fachärzten sowie einem entsprechend wissenschaftlich qualifizierten Fachpublikum.
+
+Diese Würdigung ist die Arbeitsfassung für eine KURZNACHRICHT: Im Handbuch erscheint die Publikation mit höchstens drei Sätzen (Studienziel, Studiendesign und Patientenzahl; danach ausschließlich die Hauptaussage der Studie, so wie die Daten sie tragen). Methodik, Validität und die Schlussfolgerungen der Autoren werden dafür genauso sorgfältig geprüft wie in einer ausführlichen Würdigung. Die Einordnung in die übrige Literatur, der Bezug auf Leitlinien und Empfehlungen für die Praxis entfallen, weil sie in einer Kurznachricht nicht vorkommen. Es findet keine Literaturrecherche statt.
+
+{sprach_hinweis}
+
+Titel: {entry['title']}
+Zeitschrift: {entry['journal']} ({entry['pubdate']})
+Publikationstyp: {', '.join(entry['pub_types'])}
+Abstract:
+{entry['abstract']}
+{fulltext_block}
+{volltext_hinweis}
+
+LEITFRAGE
+
+Die Würdigung dient der Beantwortung von zwei Fragen:
+1. Was ist die Hauptaussage der Studie (Ergebnis zum primären Endpunkt)?
+2. Ist diese Aussage valide, also durch Studiendesign, Daten und statistische Analyse gedeckt?
+
+{parts['rules']}ABLAUF
+
+Beginne die Ausgabe unmittelbar mit der Überschrift „1. Stärken der Studie". Erstelle die Würdigung mit genau den folgenden Abschnitten:
+
+{parts['sections']}Fazit
+
+Formuliere 2–3 Sätze Fließtext mit der Hauptaussage der Studie, so wie die Daten sie tragen: das Ergebnis zum primären Endpunkt mit Effektmaß und Konfidenzintervall (soweit berichtet, mit Studienarm, Analysepopulation und Messzeitpunkt) und in einem Halbsatz das Validitätsurteil aus Abschnitt 2. Geht die Schlussfolgerung der Autoren über das hinaus, was die Daten tragen (z. B. nicht signifikantes Ergebnis, relevante Verzerrung, explorative Analyse), formuliere die Aussage so, wie die Daten sie tragen, und nicht so, wie sie zugespitzt wurde. Keine Einordnung in andere Literatur, kein Bezug auf Leitlinien, keine Empfehlung für die Praxis.
+
+KEINE LITERATUR
+
+Verwende keine externen Quellen und keine Literaturverweise in Klammern. Gib kein Literaturverzeichnis aus.
+
+{parts['qc']}FORMATIERUNG
+
+Verwende keine Markdown-Formatierung.
+
+Keine Raute-Zeichen vor Überschriften.
+Keine Sternchen.
+Keine Trennlinien.
+Keine Tabellen.
+Keine nummerierten Aufzählungen im Text (nummeriert sind nur die drei Abschnittsüberschriften).
+
+Verwende die Abschnittsüberschriften exakt wie vorgegeben, jeweils in einer eigenen Zeile und ohne zusätzliche Zeichen:
+1. Stärken der Studie
+2. Schwächen und Limitationen
+3. Prüfung der Schlussfolgerungen der Autoren
+Fazit
+
+{parts['style']}"""
 
 
 def translate_appraisal_prompt(source_text: str, target_lang: str) -> str:

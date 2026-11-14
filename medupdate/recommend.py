@@ -20,6 +20,7 @@ Ablauf pro Thema:
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 
@@ -28,7 +29,7 @@ from datetime import date, timedelta
 from . import prompts_new as P
 from . import pubmed
 from .config import MAX_CANDIDATES_PER_TOPIC, MODEL_MAIN
-from .llm import BOOL, INT, LLM, NUM, STR, arr, enum, obj
+from .llm import BOOL, INT, LLM, NUM, STEP_RANK, STR, Job, arr, enum, obj, run_job
 
 EXCLUDED_TYPES = {
     "Comment", "Editorial", "Letter", "Erratum", "Published Erratum", "Retracted Publication",
@@ -219,9 +220,15 @@ def prefilter(records: list[dict]) -> list[dict]:
     return out
 
 
-def rank(llm: LLM, topic: dict, pico: str, records: list[dict], recency_text: str,
-         batch_size: int = 15) -> dict[str, dict]:
-    result: dict[str, dict] = {}
+# Geschätzte Kosten je bewertetem Abstract im Sammelauftrag (gemessen 11/2026: ≈ 0,0085 USD im direkten Aufruf)
+RANK_BATCH_USD = 0.0045
+
+
+def rank_jobs(topic: dict, pico: str, records: list[dict], recency_text: str, batch_size: int = 15,
+              key: str = "r") -> list[tuple[Job, set[str]]]:
+    """Die Bewertungsaufträge eines Themas (je 15 Abstracts einer) als Daten: [(Auftrag, zulässige PMIDs)].
+    Derselbe Auftrag läuft sofort (rank) oder im Sammelauftrag (pipeline.run_recommendations, Sparmodus)."""
+    out = []
     for i in range(0, len(records), batch_size):
         batch = records[i:i + batch_size]
         block = "\n".join(
@@ -229,12 +236,24 @@ def rank(llm: LLM, topic: dict, pico: str, records: list[dict], recency_text: st
             f"Publication Type (PubMed): {', '.join(r['pub_types'])}\nAbstract: {r['abstract'][:3500]}"
             for r in batch
         )
-        data = llm.json(P.ranking_prompt(topic["title"], pico, block, recency_text), RANK_SCHEMA,
-                        model=MODEL_MAIN, max_tokens=32000)
         valid = {r["pmid"] for r in batch}
-        for item in data.get("items", []):
-            if item.get("pmid") in valid:
-                result[item["pmid"]] = item
+        sig = hashlib.md5(",".join(sorted(valid)).encode("utf-8")).hexdigest()[:12]
+        out.append((Job(key=f"{key}|{sig}", prompt=P.ranking_prompt(topic["title"], pico, block, recency_text),
+                        step=STEP_RANK, model=MODEL_MAIN, max_tokens=32000, effort="medium", schema=RANK_SCHEMA,
+                        est_usd=RANK_BATCH_USD * len(batch)), valid))
+    return out
+
+
+def rank_items(data: dict, valid: set[str]) -> dict[str, dict]:
+    """Bewertungen einer KI-Antwort, beschränkt auf die angefragten PMIDs."""
+    return {item["pmid"]: item for item in (data or {}).get("items", []) if item.get("pmid") in valid}
+
+
+def rank(llm: LLM, topic: dict, pico: str, records: list[dict], recency_text: str,
+         batch_size: int = 15) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for job, valid in rank_jobs(topic, pico, records, recency_text, batch_size):
+        result.update(rank_items(run_job(llm, job), valid))
     return result
 
 
@@ -356,6 +375,16 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
                         known: dict | None = None, limit: int | None = None) -> dict:
     """known: bereits vorliegende Bewertungen dieses Themas (gleicher Suchplan); sie werden übernommen und
     nur neue Kandidaten bewertet. limit: Zahl der Kandidaten (Standard: nach den Trefferzahlen, candidate_limit)."""
+    prep = prepare_topic(llm, topic, chapter, rules, email, log, window, plan, frame, known, limit)
+    rated = rank(llm, topic, prep["plan"].get("pico", ""), prep["new"], prep["period"]) if prep["new"] else {}
+    return finish_topic(prep, rated, n_max)
+
+
+def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, log=lambda msg: None,
+                  window: list[str] | None = None, plan: dict | None = None, frame: dict | None = None,
+                  known: dict | None = None, limit: int | None = None) -> dict:
+    """Erster Teil von recommend_for_topic: Suchplan, PubMed-Suche und Kandidaten – alles bis vor die
+    Bewertung. prep["new"] sind die noch zu bewertenden Kandidaten (siehe rank_jobs), finish_topic schließt ab."""
     fixed = manual_window(window)
     von, bis = fixed or time_window(rules.get("recency_months", 0))
     if plan is None:
@@ -394,13 +423,21 @@ def recommend_for_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email:
     new = [c for c in candidates if c["pmid"] not in known]
     if known:
         log(f"{len(candidates) - len(new)} Kandidaten für „{topic['title']}“ sind schon bewertet, {len(new)} neu.")
-    ranking = dict(known)
-    if new:
-        ranking.update(rank(llm, topic, plan.get("pico", ""), new, period))
+    return {"limit": limit, "plan": plan, "window": [von.isoformat(), bis.isoformat()], "stats": stats,
+            "attempts": attempts, "records": records, "n_candidates": len(candidates), "known": known, "new": new,
+            "period": period}
+
+
+def finish_topic(prep: dict, rated: dict[str, dict], n_max: int) -> dict:
+    """Zweiter Teil von recommend_for_topic: Bewertungen (rated) mit den schon bekannten zusammenführen und
+    die Auswahl treffen."""
+    ranking = dict(prep["known"])
+    ranking.update(rated)
     chosen, backup = select(ranking, n_max)
+    records = prep["records"]
     return {
-        "cand_limit": limit,
-        "plan": plan, "window": [von.isoformat(), bis.isoformat()], "query_hits": stats, "attempts": attempts,
-        "n_candidates": len(candidates), "ranking": ranking, "recommended": chosen, "reserve": backup,
+        "cand_limit": prep["limit"],
+        "plan": prep["plan"], "window": prep["window"], "query_hits": prep["stats"], "attempts": prep["attempts"],
+        "n_candidates": prep["n_candidates"], "ranking": ranking, "recommended": chosen, "reserve": backup,
         "records": {p: records[p] for p in set(chosen) | set(backup) | set(ranking) if p in records},
     }

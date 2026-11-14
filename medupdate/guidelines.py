@@ -12,7 +12,7 @@ from . import prompts_new as P
 from .config import MODEL_FAST
 from .files import download_pdf, extract_pdf_text
 from .http import BROWSER_HEADERS, request_with_retry
-from .llm import BOOL, LLM, STR, arr, obj
+from .llm import BOOL, LLM, STEP_GUIDELINES, STR, Job, arr, obj, run_job
 
 GUIDELINE_SCHEMA = obj({
     "guidelines": arr(obj({
@@ -28,11 +28,24 @@ GUIDELINE_SCHEMA = obj({
 })
 
 
-def search_guidelines(llm: LLM, topic: str, chapter: str) -> list[dict]:
-    research = llm.text(P.guideline_search_prompt(topic, chapter, date.today().strftime("%d.%m.%Y")),
-                        model=MODEL_FAST, web_search=8, max_tokens=12000, effort="medium")
+SEARCH_BATCH_USD = 0.15  # geschätzte Kosten einer Leitliniensuche im Sammelauftrag (8 Websuchen, schnelles Modell)
+
+
+def search_job(topic: str, chapter: str, key: str = "g") -> Job:
+    """Die Leitliniensuche (Websuche) als Auftrag: läuft sofort (search_guidelines) oder im Sammelauftrag."""
+    return Job(key=key, prompt=P.guideline_search_prompt(topic, chapter, date.today().strftime("%d.%m.%Y")),
+               step=STEP_GUIDELINES, model=MODEL_FAST, max_tokens=12000, effort="medium", web_search=8,
+               est_usd=SEARCH_BATCH_USD)
+
+
+def finish_search(llm: LLM, research: str) -> list[dict]:
+    """Aus dem Rechercheergebnis die Liste der Leitlinien ablesen (kurzer direkter KI-Aufruf ohne Websuche)."""
     data = llm.json(P.guideline_extract_prompt(research), GUIDELINE_SCHEMA, max_tokens=6000)
     return data.get("guidelines", [])
+
+
+def search_guidelines(llm: LLM, topic: str, chapter: str) -> list[dict]:
+    return finish_search(llm, run_job(llm, search_job(topic, chapter)))
 
 
 _PDF_LINK_RE = re.compile(r'href=["\']([^"\']+\.pdf[^"\']*)["\']', re.IGNORECASE)

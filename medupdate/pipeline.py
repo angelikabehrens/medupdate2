@@ -8,6 +8,7 @@ import base64
 import gzip
 import hashlib
 import json
+import random
 import re
 import threading
 import traceback
@@ -29,7 +30,8 @@ from .config import APP_VERSION, MAX_CANDIDATES_PER_TOPIC, MAX_PUBS_PER_TOPIC, M
 from .files import extract_pdf_text, fetch_oa_pdf, find_doi, looks_like_real_fulltext, \
     unpaywall, upload_matches
 from .formal import run_formal_check
-from .llm import BOOL, LLM, STR, AccountError, arr, enum, obj
+from .llm import BOOL, LLM, STEP_APPRAISAL, STEP_APPRAISAL_LEAN, STR, AccountError, arr, enum, obj, \
+    run_job
 from .manuscript import build_docx, build_recommendation_docx
 from .docx_tools import build_pruefprotokoll_docx
 from .references import make_formatter
@@ -246,7 +248,15 @@ def recount_plan(proj: dict, log=lambda m: None) -> None:
     proj["plan_window"] = [von.isoformat(), bis.isoformat()]
 
 
-def run_recommendations(llm: LLM, proj: dict, log) -> None:
+def rank_failed(t: dict) -> bool:
+    """Die Literaturrecherche dieses Themas ist fehlgeschlagen und noch nicht nachgeholt. Gilt auch für
+    Zwischenstände, in denen ein älterer Programmstand dem Thema bereits eine leere Empfehlung eingetragen hat."""
+    return bool(t.get("rec_error")) and "ranking" not in t
+
+
+def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
+    """batch (Sparmodus): Die Bewertung der Suchtreffer und die Websuche nach Leitlinien laufen als ein
+    Sammelauftrag zum halben Preis (siehe _rank_in_batch); alles andere bleibt unverändert."""
     apply_manual_limits(proj)
     proj["check_ok"] = False  # neue Auswahl: Themenzuordnung in Schritt 2 erneut prüfen
     chapter = (proj["toc"] or {}).get("chapter_title", "")
@@ -259,9 +269,9 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
             # nicht suchbare Überschrift (z.B. „Kuriosa“): wird über das Sicherheitsnetz abgedeckt
             t.update({"recommended": [], "reserve": [], "ranking": {}, "n_candidates": 0, "query_hits": {},
                       "window": list(proj.get("plan_window") or ["", ""]), "plan": {"queries": []}})
-    def fresh(t):  # neu suchen und vollständig neu bewerten
+    def fresh(t):  # neu suchen und vollständig neu bewerten (auch: beim letzten Mal fehlgeschlagen)
         return ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
-                or t.get("plan_rev", 0) != t.get("ranked_rev", 0))
+                or t.get("plan_rev", 0) != t.get("ranked_rev", 0) or rank_failed(t))
 
     def widen(t):  # breites Thema mit bisher 60 Kandidaten: nur die zusätzlichen Kandidaten bewerten
         return (t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
@@ -270,19 +280,22 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
     todo = [(tid, t) for tid, t in _search_topics(proj) if t.get("searchable") is not False
             and (fresh(t) or widen(t))]
 
-    def work(t):
-        known = None
-        if not fresh(t):
-            known = dict(t.get("ranking") or {})
-            known.update({p: e["item"] for p, e in (t.get("prior_excluded") or {}).items()})
-        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window,
-                                             plan=t.get("plan"), frame=frame, known=known)
+    def known_of(t):  # bereits vorliegende Bewertungen (nur bei „breites Thema: zusätzliche Kandidaten“)
+        if fresh(t):
+            return None
+        known = dict(t.get("ranking") or {})
+        known.update({p: e["item"] for p, e in (t.get("prior_excluded") or {}).items()})
+        return known
 
-    for tid, res in _parallel(todo, work, log, "Literaturempfehlung").items():
+    def work(t):
+        return recommend.recommend_for_topic(llm, t, chapter, rules, proj["email"], n, window=window,
+                                             plan=t.get("plan"), frame=frame, known=known_of(t))
+
+    def store(tid, res):
         if isinstance(res, Exception):
             _err(proj, f"Literaturempfehlung {proj['topics'][tid]['title']}", res)
             proj["topics"][tid]["rec_error"] = f"{type(res).__name__}: {res}"
-            continue
+            return
         t = proj["topics"][tid]
         t.pop("rec_error", None)
         t.pop("selected", None)  # alte Auswahl passt nicht zur neuen Trefferliste
@@ -297,6 +310,17 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
         t.update(res)
         t["manual_query"] = manual
         t["ranked_rev"] = t.get("plan_rev", 0)
+
+    if batch and hasattr(llm, "run_batch"):
+        _rank_in_batch(llm, proj, log, todo, known_of, store, chapter, rules, n, window, frame)
+    elif _step1_paid(llm, proj, todo):
+        # Direkter Ablauf, aber aus einem Sammelauftrag liegt schon Bezahltes bereit: übernehmen, den Rest direkt
+        log("Zu diesem Projekt gehört ein früherer Sammelauftrag. Seine Ergebnisse werden übernommen (ein noch "
+            "laufender wird abgewartet); was dann fehlt, läuft direkt …")
+        _rank_in_batch(llm, proj, log, todo, known_of, store, chapter, rules, n, window, frame, submit=False)
+    else:
+        for tid, res in _parallel(todo, work, log, "Literaturempfehlung").items():
+            store(tid, res)
     apply_prior(proj, log, reselect=False)
     try:
         run_safety_net(llm, proj, log)
@@ -333,6 +357,136 @@ def run_recommendations(llm: LLM, proj: dict, log) -> None:
                 info = unpaywall(rec.get("doi", ""), proj["email"])
                 rec["is_oa"] = bool(info.get("is_oa"))
     fit_to_length(proj, log)
+
+
+def _tidy_batch_state(proj: dict, kind: str) -> None:
+    """Nach dem bloßen Abholen im direkten Ablauf: einen leer gebliebenen Merkzettel für Sammelaufträge wieder
+    entfernen, damit ein Projekt ohne Sparmodus unverändert bleibt."""
+    states = proj.get("batch")
+    if isinstance(states, dict):
+        if kind in states and not any(states[kind].values()):
+            del states[kind]
+        if not states:
+            del proj["batch"]
+
+
+def _step1_paid(llm, proj: dict, todo: list) -> bool:
+    """Liegt für Schritt 1 etwas aus einem Sammelauftrag bereit, das noch nicht übernommen ist (bezahlte
+    Bewertungen im Projekt oder ein eigener Sammelauftrag bei Anthropic)? Dann holt auch der direkte Ablauf es
+    ab, statt die Bewertung noch einmal zu bezahlen."""
+    if not hasattr(llm, "run_batch") or not (todo or _guideline_todo(proj)):
+        return False
+    if any((t.get("rank_cache") or {}).get("chunks") for _, t in todo):
+        return True
+    try:
+        return llm.batch_waiting(f"{proj['id']}-s", (proj.get("batch") or {}).get("s"))
+    except AccountError:  # bei Anthropic läuft ein Sammelauftrag unklarer Herkunft: anhalten, bevor bezahlt wird
+        raise
+    except Exception:  # noqa: BLE001 – die Nachfrage ist nur ein Sicherheitsnetz
+        return False
+
+
+def _rank_in_batch(llm, proj: dict, log, todo: list, known_of, store, chapter: str, rules: dict, n: int,
+                   window, frame, submit: bool = True) -> None:
+    """Sparmodus für Schritt 1 (2026-11-13): Die Bewertung der Suchtreffer (je 15 Abstracts ein Auftrag) und
+    die Websuche nach Leitlinien gehen gemeinsam als EIN Sammelauftrag an die KI (halber Preis, Ergebnis meist
+    innerhalb einer Stunde). Suchplan und PubMed-Suche davor sowie alles danach (Sicherheitsnetz, Zuordnung,
+    Auswahl, Auslesen der Leitlinien) laufen wie gewohnt direkt. Die Aufträge sind dieselben wie im direkten
+    Ablauf (recommend.rank_jobs, guidelines.search_job).
+
+    Bezahlte Bewertungen stehen sofort im Projekt (t["rank_cache"], je Auftrag): Bricht der Lauf ab, bevor
+    ein Thema vollständig ist, werden sie beim nächsten Start übernommen. Die Aufträge behalten dabei ihre
+    Kennung, sodass auch noch nicht abgeholte Ergebnisse bei Anthropic wiedergefunden werden.
+
+    submit=False (direkter Ablauf nach einem Lauf im Sparmodus): Es wird nur abgeholt, was schon bezahlt ist;
+    die fehlenden Bewertungen laufen danach direkt (dieselben Aufträge), die fehlenden Leitliniensuchen
+    erledigt run_guideline_search wie gewohnt direkt."""
+    def sig(t):  # Suchplan und Zeitraum, zu denen bereits bezahlte Bewertungen gehören
+        return [t.get("plan_rev", 0), list(window) if window else None]
+
+    def prepare(t):
+        return recommend.prepare_topic(llm, t, chapter, rules, proj["email"], window=window, plan=t.get("plan"),
+                                       frame=frame, known=known_of(t))
+
+    preps: dict[str, dict] = {}
+    for tid, res in _parallel(todo, prepare, log, "PubMed-Suche").items():
+        if isinstance(res, Exception):
+            store(tid, res)
+        else:
+            preps[tid] = res
+    jobs, owner = [], {}
+    pending: dict[str, set] = {}
+    rated: dict[str, dict] = {}
+    failed: dict[str, Exception] = {}
+
+    def finish(tid):
+        if tid in failed:
+            store(tid, failed[tid])  # die übrigen Bewertungen des Themas bleiben in t["rank_cache"] erhalten
+            return
+        store(tid, recommend.finish_topic(preps[tid], rated[tid], n))
+        proj["topics"][tid].pop("rank_cache", None)
+
+    for tid, prep in preps.items():
+        t = proj["topics"][tid]
+        cache = t.get("rank_cache") or {}
+        if cache.get("for") != sig(t):
+            cache = t["rank_cache"] = {"for": sig(t), "chunks": {}}
+        chunks = recommend.rank_jobs(t, prep["plan"].get("pico", ""), prep["new"], prep["period"], key=f"r|{tid}")
+        pending[tid], rated[tid] = set(), {}
+        for job, valid in chunks:
+            if job.key in cache.get("chunks", {}):  # schon bezahlt (unterbrochener Sammelauftrag)
+                rated[tid].update(cache["chunks"][job.key])
+                continue
+            jobs.append(job)
+            owner[job.key] = (tid, valid)
+            pending[tid].add(job.key)
+        if not pending[tid]:
+            finish(tid)
+    n_rank = len(jobs)
+    for tid, t in _guideline_todo(proj):
+        if not t.get("guidelines_raw"):
+            job = G.search_job(t["title"], chapter, key=f"g|{tid}")
+            jobs.append(job)
+            owner[job.key] = (tid, None)
+    if not jobs:
+        return
+    if submit:
+        log(f"Sparmodus: {n_rank} Bewertungsaufträge und {len(jobs) - n_rank} Leitliniensuchen gehen als "
+            "Sammelauftrag an die KI …")
+    state = proj.setdefault("batch", {}).setdefault("s", {})
+
+    def take(key, res):
+        tid, valid = owner[key]
+        t = proj["topics"][tid]
+        if valid is None:  # Leitliniensuche: das Rechercheergebnis wertet run_guideline_search aus
+            if isinstance(res, Exception):
+                _err(proj, f"Leitlinien {t['title']} (Sammelauftrag; die Suche wird direkt nachgeholt)", res)
+            elif res:
+                t["guidelines_raw"] = res
+            return
+        if isinstance(res, Exception):
+            failed.setdefault(tid, res)
+        else:
+            items = recommend.rank_items(res, valid)
+            rated[tid].update(items)
+            t["rank_cache"]["chunks"][key] = items  # sofort im Projekt: bezahlt ist bezahlt
+        pending[tid].discard(key)
+        if not pending[tid]:
+            finish(tid)
+
+    try:
+        for key, res in llm.run_batch(jobs, prefix=f"{proj['id']}-s", state=state, log=log, submit=submit):
+            if submit or not isinstance(res, Exception):  # direkter Ablauf: Gescheitertes läuft gleich direkt
+                take(key, res)
+    finally:
+        if not submit:
+            _tidy_batch_state(proj, "s")
+    if submit:
+        return
+    rest = [(job.key, job) for job in jobs
+            if owner[job.key][1] is not None and job.key in pending[owner[job.key][0]]]
+    for key, res in _parallel(rest, lambda job: run_job(llm, job), log, "Bewertung der Suchtreffer").items():
+        take(key, res)
 
 
 SAFETY_MAX_CANDIDATES = 60
@@ -525,6 +679,10 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
     taken = {p for v in rec.values() for p in v}
     changed = 0
     for tid, t in topics:
+        if "ranking" not in t:
+            # Recherche noch offen oder fehlgeschlagen: nichts eintragen. Eine leere Empfehlung sähe wie ein
+            # fertig recherchiertes Thema aus; es würde dann beim nächsten Start nicht wiederholt.
+            continue
         rk = t.get("ranking") or {}
         mine = sorted(rec[tid], key=lambda p: (rk[p].get("length_score", 0), rk[p].get("score", 0)), reverse=True)
         own = [p for p, (b, _) in primary.items() if b == tid and p not in taken]
@@ -813,13 +971,18 @@ def fit_to_length(proj: dict, log=lambda m: None) -> None:
                            "max_pages": (proj.get("rules") or {}).get("max_pages") or 0}
 
 
-def run_guideline_search(llm: LLM, proj: dict, log) -> None:
-    chapter = (proj["toc"] or {}).get("chapter_title", "")
-    todo = [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and "guidelines" not in t
+def _guideline_todo(proj: dict) -> list[tuple[str, dict]]:
+    return [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and "guidelines" not in t
             and not t.get("safety")]
 
+
+def run_guideline_search(llm: LLM, proj: dict, log) -> None:
+    chapter = (proj["toc"] or {}).get("chapter_title", "")
+    todo = _guideline_todo(proj)
+
     def work(t):
-        found = G.search_guidelines(llm, t["title"], chapter)
+        raw = t.get("guidelines_raw")  # Rechercheergebnis aus dem Sammelauftrag (Sparmodus); sonst direkte Suche
+        found = G.finish_search(llm, raw) if raw else G.search_guidelines(llm, t["title"], chapter)
         for g in found:
             text, src = G.fetch_guideline_text(g)
             g["text"], g["source"] = text, src
@@ -832,6 +995,7 @@ def run_guideline_search(llm: LLM, proj: dict, log) -> None:
             proj["topics"][tid]["guidelines"] = []
         else:
             proj["topics"][tid]["guidelines"] = res
+        proj["topics"][tid].pop("guidelines_raw", None)
 
 
 GL_NEED_SCHEMA = obj({"requests": arr(obj({"index": {"type": "integer"}, "reason": STR}))})
@@ -1492,6 +1656,245 @@ def _main_text(text: str) -> str:
     return text[: len(text) // 3 + m.start()] if m else text
 
 
+def _fetch_fulltexts(proj: dict, pmids: list[str]) -> None:
+    """Volltexte der Publikationen, soweit nicht hochgeladen: frei verfügbare (Open Access) selbst laden."""
+    for pmid in pmids:
+        d = proj["pubs"].setdefault(pmid, {})
+        rec = proj["records"].get(pmid, {})
+        if not d.get("full_text") and not d.get("oa_tried"):
+            d["oa_tried"] = True
+            pdf = fetch_oa_pdf(rec.get("doi", ""), proj["email"])
+            if pdf:
+                text = extract_pdf_text(pdf)
+                if looks_like_real_fulltext(text, rec.get("abstract", "")):
+                    d["full_text"], d["fulltext_source"] = text, "Open Access"
+        # Abbildungen werden nicht mehr automatisch ausgewählt (2026-10-11): PDF nach der Textextraktion
+        # nicht mehr im Speicher halten
+        d.pop("pdf", None)
+        d.pop("images", None)
+
+
+def _is_lean(proj: dict, p: str) -> bool:
+    """Die Publikation hat (nur) eine schlanke Würdigung – genügt für eine einzeln stehende Kurznachricht."""
+    return (proj["pubs"].get(p) or {}).get("appraisal_kind") == A.LEAN_KIND
+
+
+def _appraisal_inputs(proj: dict, p: str, tid: str, with_docs: bool = True) -> tuple[dict, list]:
+    rec = proj["records"].get(p, {})
+    docs = []
+    if with_docs:
+        query = f"{proj['topics'][tid]['title']} {rec.get('title', '')} {rec.get('abstract', '')[:600]}"
+        docs = _guideline_docs(proj, tid, query)
+    return _entry(rec, proj["pubs"][p]), docs
+
+
+# Felder, die auf der Würdigung aufbauen und neu entstehen müssen, wenn sie ersetzt wird
+_APPRAISAL_DERIVED = ("body_en", "literature", "short_en", "short_de", "styled_de", "style_ok", "short_v",
+                      "short_compact", "short_tier")
+
+
+def _appraise(llm: LLM, proj: dict, items: list[tuple[str, str]], lean: set[str], log, batch: bool,
+              replace: bool = False) -> None:
+    """Kritische Würdigungen für items = [(PMID, Thema)] erstellen und sofort im Projekt ablegen.
+
+    lean: Publikationen, die nur eine schlanke Würdigung erhalten (geplante Kurznachrichten). batch: als
+    Sammelauftrag zum halben Preis statt sofort; die Aufträge sind in beiden Fällen dieselben
+    (appraisal.appraisal_job / lean_appraisal_job). replace: eine vorhandene schlanke Würdigung durch eine
+    vollständige ersetzen; schlägt das fehl, bleibt die schlanke Fassung bestehen.
+
+    Im Sammelauftrag liegt die Antwort der KI zunächst unbearbeitet im Projekt (appraisal_raw). Die
+    Nachbearbeitung der Literaturziffern (bei Bedarf ein kurzer direkter KI-Aufruf) folgt danach; hält der Lauf
+    dazwischen an, holt der nächste Start sie nach, ohne die Würdigung erneut zu bezahlen.
+
+    Auch der direkte Ablauf (batch=False) übernimmt zuerst, was für dieses Projekt aus einem Sammelauftrag
+    schon bezahlt ist – unbearbeitete Antworten im Projekt und Ergebnisse, die noch bei Anthropic liegen (ein
+    eigener, noch laufender Sammelauftrag wird abgewartet). Erst was dann fehlt, wird direkt erstellt. So kostet
+    der Wechsel vom Sparmodus zum direkten Ablauf nichts doppelt."""
+    def title(p: str) -> str:
+        return proj["records"].get(p, {}).get("title", p)[:60]
+
+    def store(p: str, res, kind: str) -> None:
+        d = proj["pubs"][p]
+        d.pop("appraisal_raw", None)
+        if isinstance(res, Exception):
+            _err(proj, f"Würdigung {title(p)}" + (" (es bleibt bei der schlanken Fassung)" if replace else ""), res)
+            return
+        if replace:
+            if not res:
+                return  # leere Antwort: die schlanke Fassung bleibt
+            for k in _APPRAISAL_DERIVED:
+                d.pop(k, None)
+        d["appraisal_en"] = res
+        if kind == A.LEAN_KIND:
+            d["appraisal_kind"] = kind
+        else:
+            d.pop("appraisal_kind", None)
+
+    def waiting() -> list[tuple[str, str]]:  # noch ohne (vollständige) Würdigung
+        return [(p, t) for p, t in items
+                if (_is_lean(proj, p) if replace else not proj["pubs"][p].get("appraisal_en"))]
+
+    def finish_raw() -> None:
+        ready = [(p, p) for p, _ in items if proj["pubs"][p].get("appraisal_raw")]
+
+        def work(p):
+            raw = proj["pubs"][p]["appraisal_raw"]
+            if raw.get("kind") == A.LEAN_KIND:
+                return A.finish_lean_appraisal(raw.get("text", ""))
+            return A.finish_appraisal(llm, raw.get("text", ""), "Englisch", strict=True)
+
+        for p, res in _parallel(ready, work, log, "Nachbearbeitung der Würdigungen").items():
+            store(p, res, (proj["pubs"][p].get("appraisal_raw") or {}).get("kind") or "")
+
+    finish_raw()  # Antworten eines früheren, angehaltenen Sammelauftrags
+    if hasattr(llm, "run_batch"):
+        jobs, owner = [], {}
+        for p, tid in waiting():
+            entry, docs = _appraisal_inputs(proj, p, tid, with_docs=p not in lean)
+            # Zur Kennung des Auftrags gehört, welche Unterlagen vorlagen (Volltext ja/nein, Zahl der
+            # Leitlinienauszüge). Kommt später ein Volltext oder eine Leitlinie hinzu, wird ein älteres, noch bei
+            # Anthropic liegendes Ergebnis nicht stillschweigend übernommen: Die Würdigung entsteht dann mit den
+            # besseren Unterlagen neu. Der Wortlaut der Vorgabe gehört nicht zur Kennung, damit bezahlte Ergebnisse
+            # eine Programmänderung überstehen.
+            have = f"f{int(bool(entry.get('full_text')))}g{len(docs)}"
+            job = (A.lean_appraisal_job(entry, "Englisch", key=f"wl|{p}|{have}") if p in lean
+                   else A.appraisal_job(entry, docs, "Englisch", key=f"w|{p}|{have}"))
+            jobs.append(job)
+            owner[job.key] = (p, A.LEAN_KIND if p in lean else "")
+        if jobs:
+            state = proj.setdefault("batch", {}).setdefault("w", {})
+            try:
+                # batch=False: nur abholen (submit=False), nichts einreichen
+                for key, res in llm.run_batch(jobs, prefix=f"{proj['id']}-w", state=state, log=log, submit=batch):
+                    p, kind = owner[key]
+                    if not isinstance(res, Exception):
+                        # sofort im Projekt: bezahlt ist bezahlt
+                        proj["pubs"][p]["appraisal_raw"] = {"text": res, "kind": kind}
+                    elif batch:
+                        store(p, res, kind)
+                    # im direkten Ablauf wird ein im Sammelauftrag gescheiterter Auftrag gleich direkt nachgeholt
+            finally:
+                if not batch:
+                    _tidy_batch_state(proj, "w")
+            finish_raw()
+    if batch:
+        return
+
+    def work(item):
+        p, tid = item
+        entry, docs = _appraisal_inputs(proj, p, tid, with_docs=p not in lean)
+        if p in lean:
+            return A.generate_lean_appraisal(llm, entry, "Englisch")
+        return A.generate_appraisal(llm, entry, docs, "Englisch")
+
+    for p, res in _parallel([(p, (p, t)) for p, t in waiting()], work, log, "Kritische Würdigung").items():
+        store(p, res, A.LEAN_KIND if p in lean else "")
+
+
+def _set_body(proj: dict, p: str) -> None:
+    """Arbeitsfassung der Würdigung (body_en) und lokale Literaturliste (Nr. 1 = die Publikation selbst)."""
+    d = proj["pubs"][p]
+    if "body_en" in d:
+        return
+    main = pubmed.format_reference(proj["records"].get(p, {}))
+    if _is_lean(proj, p):
+        # Eine schlanke Würdigung hat weder Literaturziffern noch Literaturliste (die Suche danach würde eine
+        # nummerierte Aufzählung im Text für eine Literaturliste halten)
+        body, entries = d["appraisal_en"], []
+    else:
+        body, entries = extract_and_renumber_citations_global(d["appraisal_en"], 2)
+    body, lit = dedupe_local_literature(body, [main] + entries)
+    d["body_en"], d["literature"] = strip_appraisal_preamble(body), lit
+
+
+def _upgrade_lean(llm: LLM, proj: dict, need: list[tuple[str, str]], log, batch: bool) -> None:
+    """Schlank gewürdigte Publikationen vollständig würdigen (sie stehen nun in einer gemeinsamen Würdigung,
+    sind länger als eine Kurznachricht geplant, oder die schlanke Würdigung wurde abgeschaltet)."""
+    need = [(p, t) for p, t in need if _is_lean(proj, p)]
+    if not need:
+        return
+    log(f"{len(need)} bisher schlank gewürdigte Publikation(en) werden vollständig gewürdigt (sie stehen nicht "
+        "mehr als einzelne Kurznachricht im Manuskript)…")
+    _appraise(llm, proj, need, set(), log, batch, replace=True)
+    for p, _ in need:
+        _set_body(proj, p)
+
+
+def _singles_by_topic(proj: dict, pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+    by_topic: dict[str, list[str]] = {}
+    for p, t in pairs:
+        if not (proj["pubs"].get(p) or {}).get("group"):
+            by_topic.setdefault(t, []).append(p)
+    return by_topic
+
+
+def _ensure_groups(llm: LLM, proj: dict, by_topic: dict[str, list[str]], log) -> None:
+    """Gemeinsame Fragestellungen je Thema bestimmen (ein KI-Aufruf je Thema mit mindestens zwei Publikationen;
+    das Ergebnis gilt, solange dieselben Publikationen im Thema stehen)."""
+    for tid, pmids in by_topic.items():
+        t = proj["topics"][tid]
+        if len(pmids) < 2:
+            continue
+        key = [f"v{GROUP_VERSION}"] + sorted(pmids)
+        if t.get("groups_for") != key:
+            log(f"Gemeinsame Fragestellungen in „{t['title']}“ werden geprüft…")
+            try:
+                t["groups"], t["groups_for"] = find_groups(llm, proj, tid, pmids), key
+            except AccountError:
+                raise
+            except Exception as ex:
+                _err(proj, f"Gruppierung {t['title']}", ex)
+
+
+def _valid_groups(proj: dict, by_topic: dict[str, list[str]]) -> dict[str, tuple[str, dict]]:
+    """{Kennung der gemeinsamen Würdigung: (Thema, Gruppe)} für alle Gruppen, deren Publikationen vollständig
+    im Thema stehen."""
+    out = {}
+    for tid, pmids in by_topic.items():
+        for g in proj["topics"][tid].get("groups", []):
+            if all(p in pmids for p in g["pmids"]):
+                out["G-" + "-".join(g["pmids"])] = (tid, g)
+    return out
+
+
+def _preview_tiers(llm: LLM, proj: dict, pairs: list[tuple[str, str]], log, joint: bool,
+                   options: dict) -> tuple[dict[str, str], set[str]]:
+    """Längenstufen vorab bestimmen – nach denselben Regeln, mit denen run_manuscript sie nach den Würdigungen
+    plant (gemeinsame Würdigungen zählen als eine Einheit; eine bestehende Planung bleibt, solange sich
+    Publikationen und Vorgaben nicht ändern). Grundlage für die Entscheidung, welche Publikationen nur eine
+    schlanke Würdigung brauchen. Rückgabe: (Stufe je Publikation bzw. gemeinsamer Würdigung, Publikationen in
+    einer gemeinsamen Würdigung)."""
+    member_of: dict[str, str] = {}
+    if joint:
+        by_topic = _singles_by_topic(proj, pairs)
+        _ensure_groups(llm, proj, by_topic, log)
+        for gid, (_tid, g) in _valid_groups(proj, by_topic).items():
+            for m in g["pmids"]:
+                member_of[m] = gid
+    units, seen = [], set()
+    for p, t in pairs:
+        u = member_of.get(p, p)
+        if u in seen:
+            continue
+        seen.add(u)
+        rk = proj["topics"][t].get("ranking", {})
+        members = [m for m, g in member_of.items() if g == u] if u != p else [p]
+        best = max((rk.get(m, {}) for m in members), key=lambda it: it.get("length_score", 0), default={})
+        units.append(({"id": u, "length_score": best.get("length_score", 50)}, t))
+    apply_manual_limits(proj)
+    rules = proj.get("rules") or {}
+    limit_key = [rules.get("max_pages"), rules.get("max_references"), rules.get("tier_counts")]
+    current = proj.get("tiers") or {}
+    if (not current or options.get("replan_tiers") or any(u["id"] not in current for u, _ in units)
+            or proj.get("tiers_for_limits") != limit_key):
+        tiers, overflow = A.plan_tiers([u for u, _ in units], rules, _n_sections(proj, {t for _, t in units}))
+        for u in overflow:
+            tiers[u] = A.SHORTEST_TIER
+    else:
+        tiers = dict(current)
+    return tiers, set(member_of)
+
+
 def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     email = proj["email"]
     # Ein älteres Manuskript (z.B. aus einem geladenen Zwischenstand) darf nach einem Abbruch nicht als
@@ -1519,49 +1922,47 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     log(f"{len(pubs)} Publikationen in {len({t for _, t in pubs})} Themen werden verarbeitet.")
 
     # 1. Volltexte (Upload oder Open Access)
-    for pmid, _tid in pubs:
-        d = proj["pubs"].setdefault(pmid, {})
-        rec = proj["records"].get(pmid, {})
-        if not d.get("full_text") and not d.get("oa_tried"):
-            d["oa_tried"] = True
-            pdf = fetch_oa_pdf(rec.get("doi", ""), email)
-            if pdf:
-                text = extract_pdf_text(pdf)
-                if looks_like_real_fulltext(text, rec.get("abstract", "")):
-                    d["full_text"], d["fulltext_source"] = text, "Open Access"
-        # Abbildungen werden nicht mehr automatisch ausgewählt (2026-10-11): PDF nach der Textextraktion
-        # nicht mehr im Speicher halten
-        d.pop("pdf", None)
-        d.pop("images", None)
+    _fetch_fulltexts(proj, [p for p, _ in pubs])
 
     # 2. Kritische Würdigung (englisch, wie in MyLuo als Arbeitsfassung)
-    todo = [(p, (p, t)) for p, t in pubs if not proj["pubs"][p].get("appraisal_en")]
-
-    def appraise(item):
-        p, tid = item
-        rec = proj["records"].get(p, {})
-        query = f"{proj['topics'][tid]['title']} {rec.get('title', '')} {rec.get('abstract', '')[:600]}"
-        return A.generate_appraisal(llm, _entry(rec, proj["pubs"][p]), _guideline_docs(proj, tid, query), "Englisch")
-
-    log("Kritische Würdigungen werden erstellt (mit Websuche, das dauert mehrere Minuten pro Publikation)…")
-    for p, res in _parallel(todo, appraise, log, "Kritische Würdigung").items():
-        if isinstance(res, Exception):
-            _err(proj, f"Würdigung {proj['records'].get(p, {}).get('title', p)[:60]}", res)
-        else:
-            proj["pubs"][p]["appraisal_en"] = res
+    joint = bool(options.get("joint", True))
+    batch = bool(options.get("batch")) and hasattr(llm, "run_batch")  # Sparmodus: Sammelauftrag zum halben Preis
+    lean_on = bool(options.get("lean_news"))
+    todo = [(p, t) for p, t in pubs if not proj["pubs"][p].get("appraisal_en")]
+    lean: set[str] = set()
+    if lean_on and todo:
+        # Schlanke Würdigung nur für Publikationen, die als Kurznachricht geplant sind und nicht in einer
+        # gemeinsamen Würdigung stehen; dafür werden die Längen vorab nach denselben Regeln geplant
+        tiers0, grouped0 = _preview_tiers(llm, proj, pubs, log, joint, options)
+        lean = {p for p, _ in todo if tiers0.get(p) == "Kurznachricht" and p not in grouped0}
+    if todo:
+        log("Kritische Würdigungen werden erstellt "
+            + ("(Sparmodus: als Sammelauftrag, das Ergebnis kommt meist innerhalb einer Stunde)…" if batch
+               else "(mit Websuche, das dauert mehrere Minuten pro Publikation)…")
+            + (f" Davon {len(lean)} schlank (geplante Kurznachrichten)." if lean else ""))
+    _appraise(llm, proj, todo, lean, log, batch)
 
     ready = [(p, t) for p, t in pubs if proj["pubs"][p].get("appraisal_en")]
 
     # 3. Lokale Literaturliste (Nr. 1 = Publikation selbst) und Längenstufen
     for p, _ in ready:
-        d = proj["pubs"][p]
-        if "body_en" not in d:
-            body, entries = extract_and_renumber_citations_global(d["appraisal_en"], 2)
-            main = pubmed.format_reference(proj["records"].get(p, {}))
-            body, lit = dedupe_local_literature(body, [main] + entries)
-            d["body_en"], d["literature"] = strip_appraisal_preamble(body), lit
+        _set_body(proj, p)
+    # 3a. Eine schlanke Würdigung genügt nur für eine einzeln stehende Kurznachricht. Steht die Publikation
+    # jetzt in einer gemeinsamen Würdigung (oder ist die schlanke Würdigung abgeschaltet), wird sie vollständig
+    # gewürdigt, bevor es weitergeht.
+    need = [(p, t) for p, t in ready if _is_lean(proj, p)]
+    if need and lean_on:
+        grouped: set[str] = set()
+        if joint:
+            by_topic = _singles_by_topic(proj, ready)
+            _ensure_groups(llm, proj, by_topic, log)
+            grouped = {m for _tid, g in _valid_groups(proj, by_topic).values() for m in g["pmids"]}
+        # … ebenso, wenn die vollständige Würdigung aus einem früheren, angehaltenen Lauf schon bezahlt vorliegt
+        need = [(p, t) for p, t in need
+                if p in grouped or (proj["pubs"][p].get("appraisal_raw") or {}).get("kind") == ""]
+    _upgrade_lean(llm, proj, need, log, batch)
     # 3b. Gemeinsame Würdigung für Publikationen mit nahezu gleicher Fragestellung (wie MyLuo, Schritt 4B)
-    if options.get("joint", True):
+    if joint:
         ready = apply_groups(llm, proj, ready, log)
 
     apply_manual_limits(proj)
@@ -1579,6 +1980,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         proj["tiers"] = tiers
     for p, _ in ready:
         proj["tiers"].setdefault(p, A.SHORTEST_TIER)
+    # 3c. Schlank gewürdigt, aber nun doch länger als eine Kurznachricht geplant (z.B. nach einer geänderten
+    # Auswahl oder Verteilung): vollständig würdigen
+    _upgrade_lean(llm, proj, [(p, t) for p, t in ready
+                              if _is_lean(proj, p) and proj["tiers"].get(p) != "Kurznachricht"], log, batch)
 
     # 4. Kürzung (englisch). Auf Wunsch werden ältere Kürzungen (vor SHORT_VERSION) neu erstellt; dann
     # auch Übersetzung und Stilfassung, die darauf aufbauen.
@@ -1758,7 +2163,10 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
     rules = proj.get("rules") or {}
     title = (proj["toc"] or {}).get("chapter_title") or "Gesamtmanuskript"
     template = (proj.get("template") or {}).get("bytes")
-    formatter = make_formatter(llm, rules, proj["records"], email)
+    # Merkfunktion (2026-11-13): Beim erneuten Erstellen gehen nur neue oder geänderte Textstellen und
+    # Literatureinträge an die KI; die Prüfergebnisse der übrigen stehen im Projekt.
+    build_cache = proj.setdefault("build_cache", {})
+    formatter = make_formatter(llm, rules, proj["records"], email, cache=build_cache.setdefault("refs", {}))
     gliederung = outline(proj, topic_ids)
     try:
         de = headings_de(llm, proj, topic_ids)
@@ -1845,7 +2253,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         key = "DE" if lang == "Deutsch" else "EN"
         try:
             befunde, final = run_formal_check(raw, llm if lang == "Deutsch" else None, template, rules, formatter,
-                                              bold_refs=key_refs)
+                                              bold_refs=key_refs, cache=build_cache)
         except Exception as ex:
             _err(proj, f"Formale Prüfung {key}", ex)
             befunde, final = [], raw
@@ -1897,6 +2305,12 @@ def _pipeline_findings(proj: dict, ready: list) -> list[dict]:
                 "begruendung": ", ".join(f"{n}× {t}" for t, n in counts.items()) + f"; geschätzt ≈{est} Seiten"
                 + (f" bei max. {max_pages} Seiten – Limit überschritten, bitte Auswahl reduzieren." if over
                    else (f" bei max. {max_pages} Seiten." if max_pages else "."))})
+    n_lean = sum(1 for p, _ in ready if _is_lean(proj, p))
+    if n_lean:
+        out.append({"punkt": "Schlanke Würdigung für Kurznachrichten", "status": "✅",
+                    "begruendung": f"{n_lean} Kurznachricht(en) beruhen auf einer schlanken Würdigung: Methodik, "
+                    "Validität und Schlussfolgerungen der Autoren wurden geprüft; Websuche, Leitlinienbezug und "
+                    "Kommentar entfielen, weil eine Kurznachricht sie nicht enthält."})
     styled = [p for p, _ in ready if "style_ok" in proj["pubs"][p]]
     if styled:
         bad = [p for p in styled if not proj["pubs"][p]["style_ok"]]
@@ -1908,6 +2322,211 @@ def _pipeline_findings(proj: dict, ready: list) -> list[dict]:
         out.append({"punkt": "Fehler während der Erstellung", "status": "⚠️",
                     "begruendung": "; ".join(f"{e['where']}: {e['error'][:120]}" for e in proj["errors"][-10:])})
     return out
+
+
+# ======================================================================
+# Kostenaufstellung je Arbeitsschritt (2026-11-13)
+# ======================================================================
+# Jeder KI-Aufruf wird unter seinem Arbeitsschritt im Projekt mitgeschrieben (llm.LLM.bind → proj["cost_log"]),
+# auch wenn ein Lauf abbricht. proj["cost_runs"] hält zusätzlich die letzten Läufe fest.
+
+COST_RUNS_MAX = 40
+
+
+def note_run(proj: dict, label: str, llm) -> None:
+    """Hält die Kosten eines beendeten (oder abgebrochenen) Laufs im Projekt fest."""
+    summary = llm.run_summary() if hasattr(llm, "run_summary") else {}
+    if not summary:
+        return
+    runs = proj.setdefault("cost_runs", [])
+    runs.append({"when": datetime.now(timezone.utc).isoformat(timespec="minutes"), "label": label,
+                 "usd": round(sum(r.get("usd", 0.0) for r in summary.values()), 4), "steps": summary})
+    del runs[:-COST_RUNS_MAX]
+
+
+def cost_overview(proj: dict) -> dict:
+    """Kosten des Projekts je Arbeitsschritt, teuerster zuerst: {"rows": [{"step", "calls", "batch", "searches",
+    "usd", "list_usd"}], "total", "earlier", "saved", "runs"}. "earlier": Kosten aus der Zeit vor der
+    Aufstellung (ältere Projekte); "saved": Ersparnis durch Sammelaufträge gegenüber dem Listenpreis."""
+    rows = [{"step": step, "calls": int(r.get("calls", 0)), "batch": int(r.get("batch_requests", 0)),
+             "searches": int(r.get("searches", 0)), "usd": float(r.get("usd", 0.0)),
+             "list_usd": float(r.get("list_usd", 0.0))}
+            for step, r in (proj.get("cost_log") or {}).items() if r.get("usd") or r.get("calls")]
+    rows.sort(key=lambda r: -r["usd"])
+    total = sum(r["usd"] for r in rows)
+    return {"rows": rows, "total": total, "earlier": max(0.0, (proj.get("cost_usd") or 0.0) - total),
+            "saved": max(0.0, sum(r["list_usd"] - r["usd"] for r in rows)),
+            "runs": list(proj.get("cost_runs") or [])[-5:]}
+
+
+# ======================================================================
+# Vergleich „schlanke Würdigung“ für Kurznachrichten (Sparmaßnahme 2026-11-13)
+# ======================================================================
+# Die Autorin entscheidet anhand von drei Publikationen, ob die schlanke Würdigung für Kurznachrichten
+# gleichwertig ist: je Publikation entsteht die Kurznachricht einmal aus der vollständigen und einmal aus der
+# schlanken Würdigung, in zufälliger Reihenfolge („Fassung 1/2“), die Auflösung steht am Ende.
+
+LEAN_TEST_N = 3
+STEP_CITE_FIX = "Literaturziffern der Würdigung angleichen"
+
+
+def run_lean_comparison(llm: LLM, proj: dict, log, n: int = LEAN_TEST_N) -> None:
+    """Ergebnis in proj["lean_test"] (Word-Datei: lean_comparison_docx). Vollständige Würdigungen, die dabei neu
+    entstehen, bleiben als Würdigung der Publikation im Projekt und werden später nicht noch einmal bezahlt.
+    Bricht der Vergleich ab, setzt ein erneuter Start dort fort (proj["lean_test_work"])."""
+    apply_manual_limits(proj)
+    pubs = _pub_list(proj)
+    if not pubs:
+        raise ValueError("Es sind noch keine Publikationen ausgewählt.")
+    topic_of = dict(pubs)
+    work = proj.setdefault("lean_test_work", {})
+    chosen = [p for p in work.get("pmids", []) if p in topic_of]
+    if not chosen:
+        tiers, grouped = _preview_tiers(llm, proj, pubs, log, True, {"replan_tiers": True})
+        singles = [p for p, _ in pubs if p not in grouped]
+
+        def score(p):
+            return proj["topics"][topic_of[p]].get("ranking", {}).get(p, {}).get("length_score", 50)
+
+        def has_full(p):
+            return bool(proj["pubs"].get(p, {}).get("appraisal_en")) and not _is_lean(proj, p)
+
+        # zuerst geplante Kurznachrichten (bevorzugt mit vorhandener Würdigung, dann die wichtigsten), sonst
+        # die Publikationen mit dem niedrigsten Längenwert
+        news = sorted((p for p in singles if tiers.get(p) == "Kurznachricht"),
+                      key=lambda p: (not has_full(p), -score(p)))
+        rest = sorted((p for p in singles if p not in news), key=score)
+        chosen = (news + rest)[:n]
+        work.clear()
+        work.update({"pmids": chosen, "items": {}})
+    items = work.setdefault("items", {})
+    for p in chosen:
+        items.setdefault(p, {})
+    log(f"Vergleich für {len(chosen)} Publikation(en): vollständige und schlanke Würdigung, daraus je eine "
+        "Kurznachricht…")
+    _fetch_fulltexts(proj, chosen)
+
+    # 1. Vollständige Würdigung (vorhandene werden verwendet; eine vorhandene schlanke wird ersetzt und für den
+    # Vergleich aufgehoben)
+    for p in chosen:
+        if _is_lean(proj, p) and "lean_en" not in items[p]:
+            items[p]["lean_en"] = proj["pubs"][p]["appraisal_en"]
+    _appraise(llm, proj, [(p, topic_of[p]) for p in chosen if not proj["pubs"].get(p, {}).get("appraisal_en")],
+              set(), log, False)
+    _appraise(llm, proj, [(p, topic_of[p]) for p in chosen if _is_lean(proj, p)], set(), log, False, replace=True)
+    chosen = [p for p in chosen if proj["pubs"][p].get("appraisal_en") and not _is_lean(proj, p)]
+    if not chosen:
+        raise RuntimeError("Für den Vergleich konnte keine vollständige Würdigung erstellt werden (siehe Hinweise "
+                           "aus der Verarbeitung).")
+    for p in chosen:
+        _set_body(proj, p)
+
+    # 2. Schlanke Würdigung
+    def lean(p):
+        entry, _ = _appraisal_inputs(proj, p, topic_of[p], with_docs=False)
+        return A.generate_lean_appraisal(llm, entry, "Englisch")
+
+    for p, res in _parallel([(p, p) for p in chosen if "lean_en" not in items[p]], lean, log,
+                            "Schlanke Würdigung").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Schlanke Würdigung {proj['records'].get(p, {}).get('title', p)[:60]}", res)
+        else:
+            items[p]["lean_en"] = res
+
+    # 3. Kurznachricht aus beiden Würdigungen, dann Übersetzung (wie im Manuskript, ohne Stilanpassung)
+    def news_of(job):
+        p, kind = job
+        body = proj["pubs"][p]["body_en"] if kind == "full" else strip_appraisal_preamble(items[p]["lean_en"])
+        en = A.kurznachricht(llm, body, "Englisch", proj["records"].get(p, {}).get("abstract") or "")
+        return {"en": en, "de": A.translate_structured(llm, en)}
+
+    todo = [((p, kind), (p, kind)) for p in chosen for kind in ("full", "lean")
+            if not (items[p].get(kind) or {}).get("de") and (kind == "full" or items[p].get("lean_en"))]
+    for (p, kind), res in _parallel(todo, news_of, log, "Kurznachricht").items():
+        if isinstance(res, Exception):
+            _err(proj, f"Kurznachricht für den Vergleich {p}", res)
+        else:
+            items[p][kind] = res
+
+    done = [p for p in chosen if (items[p].get("full") or {}).get("de") and (items[p].get("lean") or {}).get("de")]
+    if not done:
+        raise RuntimeError("Der Vergleich konnte nicht erstellt werden (siehe Hinweise aus der Verarbeitung).")
+    summary = llm.run_summary() if hasattr(llm, "run_summary") else {}
+    full_calls = summary.get(STEP_APPRAISAL, {}).get("calls", 0)
+    lean_calls = summary.get(STEP_APPRAISAL_LEAN, {}).get("calls", 0)
+    costs = dict((proj.get("lean_test") or {}).get("costs") or {})  # Messwerte eines früheren Teil-Laufs behalten
+    if full_calls:
+        costs["full_usd"] = round((summary[STEP_APPRAISAL].get("usd", 0.0)
+                                   + summary.get(STEP_CITE_FIX, {}).get("usd", 0.0)) / full_calls, 3)
+        costs["full_n"] = full_calls
+    if lean_calls:
+        costs["lean_usd"] = round(summary[STEP_APPRAISAL_LEAN].get("usd", 0.0) / lean_calls, 3)
+        costs["lean_n"] = lean_calls
+    out = []
+    for p in done:
+        rec = proj["records"].get(p, {})
+        first = random.Random(f"{proj.get('id', '')}|{p}").choice(["full", "lean"])
+        out.append({"pmid": p, "title": rec.get("title", p), "journal": rec.get("journal", ""),
+                    "year": rec.get("year", ""), "first": first,
+                    "full_de": items[p]["full"]["de"], "lean_de": items[p]["lean"]["de"],
+                    "full_en": items[p]["full"]["en"], "lean_en": items[p]["lean"]["en"]})
+    proj["lean_test"] = {"created": datetime.now(timezone.utc).isoformat(timespec="minutes"), "items": out,
+                         "costs": costs, "version": APP_VERSION}
+    proj.pop("lean_test_work", None)
+    log("Vergleich fertig.")
+
+
+def lean_comparison_docx(proj: dict) -> bytes | None:
+    """Word-Datei zum Vergleich: je Publikation „Fassung 1“ und „Fassung 2“ der Kurznachricht ohne Hinweis auf
+    die Herkunft; Auflösung und gemessene Kosten auf der letzten Seite."""
+    test = proj.get("lean_test") or {}
+    if not test.get("items"):
+        return None
+    from io import BytesIO
+    from docx import Document
+    doc = Document()
+    doc.add_heading("Vergleich: Kurznachricht aus vollständiger und aus schlanker Würdigung", level=1)
+    doc.add_paragraph(
+        "Je Publikation stehen hier zwei Fassungen der Kurznachricht, so wie sie im Manuskript erscheinen würden "
+        "(vor der Anpassung an Ihren Schreibstil). Eine beruht auf der vollständigen kritischen Würdigung mit "
+        "Websuche, die andere auf der schlanken Würdigung ohne Websuche. Die Reihenfolge ist zufällig. Bitte "
+        "notieren Sie je Publikation: gleichwertig, Fassung 1 besser oder Fassung 2 besser. Die Auflösung steht "
+        "auf der letzten Seite.")
+    for i, it in enumerate(test["items"], start=1):
+        doc.add_heading(f"{i}. {it['title']}", level=2)
+        doc.add_paragraph().add_run(f"{it.get('journal', '')} {it.get('year', '')} · PMID {it['pmid']}".strip()
+                                    ).italic = True
+        order = [it["first"], "lean" if it["first"] == "full" else "full"]
+        for k, kind in enumerate(order, start=1):
+            para = doc.add_paragraph()
+            para.add_run(f"Fassung {k}: ").bold = True
+            para.add_run(it[f"{kind}_de"])
+        doc.add_paragraph("Urteil: ☐ gleichwertig   ☐ Fassung 1 besser   ☐ Fassung 2 besser")
+    doc.add_page_break()
+    doc.add_heading("Auflösung", level=1)
+    names = {"full": "vollständige Würdigung", "lean": "schlanke Würdigung"}
+    for i, it in enumerate(test["items"], start=1):
+        other = "lean" if it["first"] == "full" else "full"
+        doc.add_paragraph(f"{i}. Fassung 1 = {names[it['first']]}, Fassung 2 = {names[other]}")
+    doc.add_heading("Gemessene KI-Kosten je Würdigung", level=2)
+    c = test.get("costs") or {}
+    usd = lambda v: f"{v:.2f}".replace(".", ",")  # noqa: E731
+    if c.get("full_usd") is not None:
+        doc.add_paragraph(f"Vollständige Würdigung: ≈ {usd(c['full_usd'])} USD (Mittel aus {c.get('full_n', 1)} "
+                          "Würdigung(en) dieses Vergleichs, direkter Aufruf).")
+    else:
+        doc.add_paragraph("Vollständige Würdigung: in diesem Vergleich nicht neu erstellt (die vorhandenen wurden "
+                          "verwendet); die Kosten stehen in der Kostenaufstellung der App.")
+    if c.get("lean_usd") is not None:
+        doc.add_paragraph(f"Schlanke Würdigung: ≈ {usd(c['lean_usd'])} USD (Mittel aus {c.get('lean_n', 1)} "
+                          "Würdigung(en) dieses Vergleichs, direkter Aufruf).")
+    if c.get("full_usd") is not None and c.get("lean_usd") is not None:
+        doc.add_paragraph(f"Ersparnis je Kurznachricht: ≈ {usd(max(0.0, c['full_usd'] - c['lean_usd']))} USD. Im "
+                          "Sparmodus (Sammelauftrag) halbieren sich beide Werte ungefähr.")
+    doc.add_paragraph(f"Erstellt am {test.get('created', '')[:10]}, Programmstand {test.get('version', '')}.")
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
 
 
 # ======================================================================
@@ -2161,31 +2780,11 @@ def find_groups(llm: LLM, proj: dict, tid: str, pmids: list[str]) -> list[dict]:
 def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> list[tuple[str, str]]:
     """Ersetzt Publikationen mit nahezu gleicher Fragestellung durch EINE gemeinsame Würdigung
     (Eintrag "G-…" in proj["pubs"], gebildet aus den Einzelwürdigungen). Gibt die neue Liste zurück."""
-    singles = [(p, t) for p, t in ready if not proj["pubs"][p].get("group")]
-    by_topic: dict[str, list[str]] = {}
-    for p, t in singles:
-        by_topic.setdefault(t, []).append(p)
-    for tid, pmids in by_topic.items():
-        t = proj["topics"][tid]
-        if len(pmids) < 2:
-            continue
-        key = [f"v{GROUP_VERSION}"] + sorted(pmids)
-        if t.get("groups_for") != key:
-            log(f"Gemeinsame Fragestellungen in „{t['title']}“ werden geprüft…")
-            try:
-                t["groups"], t["groups_for"] = find_groups(llm, proj, tid, pmids), key
-            except AccountError:
-                raise
-            except Exception as ex:
-                _err(proj, f"Gruppierung {t['title']}", ex)
-    todo = []
-    for tid in by_topic:
-        for g in proj["topics"][tid].get("groups", []):
-            if not all(p in by_topic[tid] for p in g["pmids"]):
-                continue
-            gid = "G-" + "-".join(g["pmids"])
-            if not proj["pubs"].get(gid, {}).get("appraisal_en"):
-                todo.append((gid, (gid, tid, g)))
+    by_topic = _singles_by_topic(proj, ready)
+    _ensure_groups(llm, proj, by_topic, log)
+    valid = _valid_groups(proj, by_topic)
+    todo = [(gid, (gid, tid, g)) for gid, (tid, g) in valid.items()
+            if not proj["pubs"].get(gid, {}).get("appraisal_en")]
 
     def joint(item):
         gid, tid, g = item
@@ -2204,8 +2803,7 @@ def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> lis
         if isinstance(res, Exception):
             _err(proj, "Gemeinsame Würdigung", res)
             continue
-        tid, g = next((tid, g) for tid in by_topic for g in proj["topics"][tid].get("groups", [])
-                      if "G-" + "-".join(g["pmids"]) == gid)
+        tid, g = valid[gid]
         body, entries = extract_and_renumber_citations_global(res, len(g["pmids"]) + 1)
         mains = [pubmed.format_reference(proj["records"].get(m, {})) for m in g["pmids"]]
         proj["pubs"][gid] = {"group": g["pmids"], "topic_id": tid, "appraisal_en": res,
@@ -2213,9 +2811,7 @@ def apply_groups(llm: LLM, proj: dict, ready: list[tuple[str, str]], log) -> lis
                              "title_de": f"Gemeinsame Würdigung: {g['question_de'] or g['question_en']}",
                              "title_en": f"Joint appraisal: {g['question_en'] or g['question_de']}"}
     # Reihenfolge: die gemeinsame Würdigung steht an der Stelle ihrer ersten Publikation
-    current = {"G-" + "-".join(g["pmids"]) for tid in by_topic for g in proj["topics"][tid].get("groups", [])
-               if all(p in by_topic[tid] for p in g["pmids"])}
-    member_of = {m: gid for gid in current if proj["pubs"].get(gid, {}).get("body_en")
+    member_of = {m: gid for gid in valid if proj["pubs"].get(gid, {}).get("body_en")
                  for m in proj["pubs"][gid]["group"]}
     out, seen = [], set()
     for p, t in ready:
@@ -2457,6 +3053,10 @@ def import_project(data: bytes) -> dict:
     proj = json.loads(data.decode("utf-8"), object_hook=_dec)
     for d in (proj.get("pubs") or {}).values():  # ältere Zwischenstände: große Binärdaten verwerfen
         d.pop("images", None)
+    if not proj.get("id"):
+        # Sehr alte Zwischenstände ohne Projektkennung: aus dem Inhalt ableiten, damit dieselbe Datei bei jedem
+        # Laden dieselbe Kennung erhält (über sie findet die App einen laufenden Sammelauftrag wieder)
+        proj["id"] = hashlib.md5(data).hexdigest()[:12]
     base = new_project()
     base.update(proj)
     return base

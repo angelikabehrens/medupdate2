@@ -52,7 +52,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 Lokale Secrets in `.streamlit/secrets.toml` (wird per `.gitignore` nicht hochgeladen).
-Test ohne Internet: `python tests/test_pipeline_offline.py`
+Tests ohne Internet und ohne KI-Kosten: `python tests/test_pipeline_offline.py` (Gesamtablauf),
+`python tests/test_savings_offline.py` (Sparmaßnahmen, Sammelaufträge) und
+`python tests/test_app_offline.py` (Bedienoberfläche).
 
 ## Hinweise für Nutzer
 - Keine Patientendaten oder anderweitig vertrauliche Inhalte hochladen: Texte werden zur Verarbeitung an die
@@ -63,6 +65,16 @@ Test ohne Internet: `python tests/test_pipeline_offline.py`
 - Kosten: Die App misst die KI-Kosten (Listenpreise) und zeigt sie nach jedem Lauf an. Für Schritt 2 gibt es
   ein Kostenlimit pro Lauf und einen Probelauf (erstes Thema, höchstens 2 Publikationen). Größter Posten ist
   die kritische Würdigung mit Websuche; der Kontext wird dafür zwischengespeichert (Prompt-Caching).
+  Die Seitenleiste zeigt die Kosten je Arbeitsschritt.
+- Kosten sparen (seit 11/2026, jeweils per Häkchen): Im **Sparmodus** gehen die kritischen Würdigungen
+  (Schritt 2) bzw. die Bewertung der Suchtreffer und die Leitliniensuche (Schritt 1) als Sammelauftrag an
+  die KI: halber Preis, gleiche Aufträge, Ergebnis meist innerhalb einer Stunde. Vorher den Zwischenstand
+  speichern; damit findet die App den Sammelauftrag auch nach einem Neustart wieder. Ein späterer Start
+  ohne Sparmodus oder auf dem zweiten Server übernimmt bereits Bezahltes ebenfalls; läuft bei Anthropic
+  noch ein Sammelauftrag, den die App keinem Projekt zuordnen kann, hält ein Start ohne Sparmodus an,
+  bevor er etwas doppelt bezahlt. Die **schlanke Würdigung für Kurznachrichten** (ohne Websuche) erst
+  nach dem eingebauten Vergleich einschalten. Beim erneuten Erstellen prüft die App nur geänderte
+  Textstellen neu.
 - Nach einem Abbruch lassen sich alle bis dahin fertigen Würdigungen als Word-Datei herunterladen.
 - Neue Anthropic-Konten haben niedrige Rate-Limits (Token pro Minute). Die App wartet dann automatisch;
   bricht sie trotzdem ab, `PARALLEL_WORKERS = "1"` setzen. Ein erneuter Start setzt an derselben Stelle fort.

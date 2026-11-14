@@ -24,6 +24,16 @@ from medupdate.llm import LLM
 
 # Kostenlimit für den Pflichtschritt „Hochladen und Themenzuordnung prüfen“ (wenige KI-Aufrufe)
 CHECK_BUDGET_USD = 5.0
+# Kostenlimit für den Vergleich „schlanke Würdigung“ (drei vollständige und drei schlanke Würdigungen)
+LEAN_TEST_BUDGET_USD = 12.0
+# Sparmodus in Schritt 1: Bewertung der Suchtreffer und Leitliniensuche zum halben Preis, der Rest unverändert –
+# zusammen etwa ein Drittel weniger (Schätzung nach der Kostenprüfung vom 13.11.2026, noch nicht gemessen)
+STEP1_BATCH_FACTOR = 0.67
+
+
+def usd(value: float) -> str:
+    """Betrag mit zwei Nachkommastellen und Dezimalkomma."""
+    return f"{value:.2f}".replace(".", ",")
 
 st.set_page_config(page_title="MyLuo Pro", layout="wide")
 st.markdown(
@@ -74,7 +84,26 @@ with st.sidebar:
         st.header("🔑 KI-Zugang")
         api_key = st.text_input("Anthropic-API-Schlüssel", type="password")
     if proj.get("cost_usd"):
-        st.caption(f"KI-Kosten dieses Projekts bisher ≈ {proj['cost_usd']:.2f} USD")
+        st.caption(f"KI-Kosten dieses Projekts bisher ≈ {usd(proj['cost_usd'])} USD")
+        _co = pipeline.cost_overview(proj)
+        if _co["rows"]:
+            with st.expander("📊 Kosten je Arbeitsschritt"):
+                for _r in _co["rows"]:
+                    st.caption(f"**{_r['step']}**: {usd(_r['usd'])} USD · {_r['calls']} "
+                               + ("Aufruf" if _r["calls"] == 1 else "Aufrufe")
+                               + (f", davon {_r['batch']} im Sammelauftrag" if _r["batch"] else "")
+                               + (f" · {_r['searches']} Websuche{'' if _r['searches'] == 1 else 'n'}"
+                                  if _r["searches"] else ""))
+                if _co["earlier"] >= 0.01:
+                    st.caption(f"**Vor Einführung dieser Aufstellung**: {usd(_co['earlier'])} USD")
+                if _co["saved"] >= 0.01:
+                    st.caption(f"Ersparnis durch den Sparmodus bisher: {usd(_co['saved'])} USD")
+                if _co["runs"]:
+                    st.caption("Letzte Läufe: " + " · ".join(
+                        f"{_x['label']} {usd(_x['usd'])} USD ({_x['when'][8:10]}.{_x['when'][5:7]}.)"
+                        for _x in reversed(_co["runs"])))
+                st.caption("Listenpreise von Anthropic, von der App mitgezählt; maßgeblich ist die Abrechnung "
+                           "in der Anthropic-Konsole.")
     st.divider()
     st.header("💾 Zwischenstand")
     st.caption("Die App speichert nichts auf dem Server. Den Zwischenstand hier herunterladen und später "
@@ -132,6 +161,8 @@ def run_with_status(label: str, fn, llm: LLM | None = None) -> None:
     nur den Fortschritt an. (Ein Neustart der App selbst beendet ihn; Fertiges bleibt im Zwischenstand.)"""
     job = {"label": label, "proj": proj, "log": [], "state": "running", "error": "", "started": time.time(),
            "llm": llm, "before": llm.cost_usd if llm else 0.0, "spent": 0.0}
+    if llm:
+        llm.bind(proj)  # jeder KI-Aufruf zählt sofort im Projekt mit (Summe und Aufstellung je Arbeitsschritt)
 
     def log(msg: str) -> None:
         job["log"] = (job["log"] + [f"{msg} ({int(time.time() - job['started'])} Sek.)"])[-8:]
@@ -146,12 +177,18 @@ def run_with_status(label: str, fn, llm: LLM | None = None) -> None:
         finally:
             if llm:
                 job["spent"] = llm.cost_usd - job["before"]
-                proj["cost_usd"] = proj.get("cost_usd", 0.0) + job["spent"]
+                pipeline.note_run(proj, label, llm)
             job["ended"] = time.time()
 
     _jobs()[proj["id"]] = job
     threading.Thread(target=target, daemon=True, name=f"lauf-{proj['id']}").start()
     st.rerun()
+
+
+def run_steps(llm: LLM | None, top: int = 4) -> str:
+    """Die teuersten Arbeitsschritte eines Laufs als eine Zeile."""
+    steps = sorted((llm.run_summary() if llm else {}).items(), key=lambda kv: -kv[1]["usd"])[:top]
+    return " · ".join(f"{step} {usd(r['usd'])} USD" for step, r in steps if r["usd"] >= 0.005)
 
 
 def show_job() -> None:
@@ -171,9 +208,10 @@ def show_job() -> None:
                            expanded=True):
                 for line in job["log"][-5:]:
                     st.write(line)
-                st.caption(f"KI-Kosten dieses Laufs bisher ≈ {spent:.2f} USD. Sie können das Fenster schließen; "
-                           "der Lauf geht auf dem Server weiter. Später diese Seite öffnen und den Lauf in der "
-                           "Seitenleiste übernehmen.")
+                st.caption(f"KI-Kosten dieses Laufs bisher ≈ {usd(spent)} USD"
+                           + (f" ({run_steps(llm)})" if run_steps(llm) else "")
+                           + ". Sie können das Fenster schließen; der Lauf geht auf dem Server weiter. Später diese "
+                           "Seite öffnen und den Lauf in der Seitenleiste übernehmen.")
             if llm and st.button("⏹ Lauf anhalten (Fertiges bleibt erhalten)"):
                 llm.stop_requested = True  # der nächste KI-Aufruf hält sauber an
                 st.toast("Wird nach dem laufenden Schritt angehalten.")
@@ -187,8 +225,10 @@ def show_job() -> None:
             st.error(f"{job['label']} – abgebrochen: {job['error']}\n\nEin erneuter Start setzt an derselben "
                      "Stelle fort; bereits Erledigtes wird nicht noch einmal bezahlt.")
         if job.get("llm"):
-            st.caption(f"KI-Kosten dieses Laufs ≈ {job['spent']:.2f} USD ({job['llm'].web_searches} Websuchen); "
-                       f"Projekt bisher ≈ {proj.get('cost_usd', 0):.2f} USD (Listenpreise, Schätzung).")
+            st.caption(f"KI-Kosten dieses Laufs ≈ {usd(job['spent'])} USD ({job['llm'].web_searches} Websuchen); "
+                       f"Projekt bisher ≈ {usd(proj.get('cost_usd', 0))} USD (Listenpreise, Schätzung)."
+                       + (f" Davon: {run_steps(job['llm'], 6)}." if run_steps(job["llm"]) else "")
+                       + " Die Aufstellung je Arbeitsschritt steht in der Seitenleiste.")
 
 
 # ======================================================================
@@ -298,6 +338,15 @@ with st.form("step1"):
                                 help="Die App erstellt zuerst je Thema die englischen PubMed-Suchen und zählt die Treffer "
                                      "(wenige Cent je Thema). Sie können die Suchen prüfen, ändern und eigene "
                                      "Suchbegriffe ergänzen. Erst danach werden die Arbeiten bewertet.")
+    batch1 = b_go.checkbox(
+        "Sparmodus: Treffer als Sammelauftrag bewerten (etwa ein Drittel günstiger, dauert meist bis zu einer Stunde länger)",
+        value=bool(proj.get("batch_step1")),
+        help="Die Bewertung der Suchtreffer und die Leitliniensuche gehen gesammelt an die KI und kosten dann die "
+             "Hälfte. Die Aufträge und die Qualität sind dieselben wie im direkten Ablauf, nur das Ergebnis kommt "
+             "später: meist innerhalb einer Stunde, spätestens nach 24 Stunden. Sie können das Fenster schließen. "
+             "Speichern Sie vorher den Zwischenstand; damit findet die App den Sammelauftrag auch nach einem "
+             "Neustart wieder – auch wenn Sie danach ohne Sparmodus weitermachen. Die Ersparnis ist eine "
+             "Schätzung und wird nach den ersten Läufen nachgemessen.")
     go1 = b_go.form_submit_button("🔍 Literatursuche starten" + (" (zuerst Suchplan)" if proj.get("review_plan", True) else ""))
 
 if proj.get("search_window"):
@@ -330,6 +379,7 @@ if go1:
             proj["prior"] = prior.build_prior({f.name: extract_text(f.name, f.read()) for f in prior_files})
 
         proj["review_plan"] = bool(review_plan)
+        proj["batch_step1"] = _batch1 = bool(batch1)
 
         def step1(log):
             pipeline.run_intake(llm, proj, toc_text, guide_text, template, log)
@@ -339,7 +389,7 @@ if go1:
                 pipeline.fit_to_length(proj, log)
             if proj["review_plan"]:
                 return  # Suchplan anzeigen; die Bewertung startet die Autorin danach selbst
-            pipeline.run_recommendations(llm, proj, log)
+            pipeline.run_recommendations(llm, proj, log, batch=_batch1)
             pipeline.run_guideline_search(llm, proj, log)
             pipeline.run_guideline_needs(llm, proj, log)
 
@@ -450,7 +500,8 @@ if proj.get("toc"):
                 if t.get("enabled", True) and not t.get("varia") and not t.get("safety")]
     if _frame:
         _pending = [tid for tid, t in _stopics if t.get("searchable") is not False
-                    and ("recommended" not in t or t.get("plan_rev", 0) != t.get("ranked_rev", 0))]
+                    and ("recommended" not in t or pipeline.rank_failed(t)
+                         or t.get("plan_rev", 0) != t.get("ranked_rev", 0))]
         with st.expander(f"🔎 Suchplan prüfen – {len(_stopics)} Themen"
                          + (f", {len(_pending)} noch nicht bewertet" if _pending else ""), expanded=bool(_pending)):
             _st = {"methode": "nach einer Methode", "krankheit": "nach einer Erkrankung", "gemischt": "gemischt"}
@@ -494,6 +545,16 @@ if proj.get("toc"):
                     if _man != t.get("manual_query", ""):
                         t["manual_query"] = _man
                         t["plan_rev"] = t.get("plan_rev", 0) + 1
+            _b1 = st.checkbox(
+                "Sparmodus: Treffer als Sammelauftrag bewerten (etwa ein Drittel günstiger, dauert meist bis zu "
+                "einer Stunde länger)", value=bool(proj.get("batch_step1")),
+                key=f"batch_step1_plan_{int(bool(proj.get('batch_step1')))}", disabled=_running,
+                help="Die Bewertung der Suchtreffer und die Leitliniensuche gehen gesammelt an die KI und kosten "
+                     "dann die Hälfte. Aufträge und Qualität sind dieselben wie im direkten Ablauf, nur das Ergebnis "
+                     "kommt später: meist innerhalb einer Stunde, spätestens nach 24 Stunden. Speichern Sie vorher "
+                     "den Zwischenstand; damit findet die App den Sammelauftrag auch nach einem Neustart wieder – "
+                     "auch wenn Sie danach ohne Sparmodus weitermachen.")
+            proj["batch_step1"] = bool(_b1)
             p1, p2 = st.columns(2)
             if p1.button("🔢 Treffer neu zählen", disabled=_running, key="plan_recount"):
                 _plm = get_llm()
@@ -501,13 +562,17 @@ if proj.get("toc"):
                     run_with_status("Suchplan wird aktualisiert",
                                     lambda log: pipeline.run_search_plan(_plm, proj, log), _plm)
             _n = max(len(_pending), 1)
-            if p2.button(f"✅ Literatur bewerten und Leitlinien recherchieren (ca. {0.4 * _n:.{0 if _n >= 10 else 1}f}–{0.8 * _n:.{0 if _n >= 10 else 1}f} USD)",
+            _f1 = STEP1_BATCH_FACTOR if _b1 else 1.0
+            _dec = 0 if _n >= 10 else 1
+            if p2.button("✅ Literatur bewerten und Leitlinien recherchieren (ca. "
+                         f"{f'{0.4 * _n * _f1:.{_dec}f}'.replace('.', ',')}–"
+                         f"{f'{0.8 * _n * _f1:.{_dec}f}'.replace('.', ',')} USD)",
                          disabled=_running or not _pending, key="plan_go", type="primary"):
                 _plm = get_llm()
                 if _plm:
-                    def _rank_all(log):
+                    def _rank_all(log, _batch=bool(_b1)):
                         pipeline.run_search_plan(_plm, proj, log)
-                        pipeline.run_recommendations(_plm, proj, log)
+                        pipeline.run_recommendations(_plm, proj, log, batch=_batch)
                         pipeline.run_guideline_search(_plm, proj, log)
                         pipeline.run_guideline_needs(_plm, proj, log)
                     run_with_status("Literatur wird bewertet", _rank_all, _plm)
@@ -545,7 +610,7 @@ if proj.get("toc"):
             if t.get("rec_error"):
                 st.error(f"Die Literaturrecherche ist für dieses Thema fehlgeschlagen: {t['rec_error']}. "
                          "Ein erneuter Start von Schritt 1 wiederholt nur die fehlgeschlagenen Themen.")
-            if rec_ids is None:
+            if rec_ids is None or "window" not in t:  # noch nicht recherchiert oder fehlgeschlagen
                 if not t.get("rec_error"):
                     st.info("Noch keine Literaturempfehlung.")
                 continue
@@ -668,10 +733,15 @@ if any("recommended" in t for t in proj["topics"].values()):
 
     wanted = list(dict.fromkeys(pipeline.selected_pmids(proj)))
     n_sec = len({t.get("section_number") or tid for tid, t in proj["topics"].items() if t.get("enabled", True)})
-    st.info(f"Grobe Schätzung der KI-Kosten für Schritt 2: etwa {len(wanted) * 0.6 + n_sec * 0.3 + 1:.0f}–"
-            f"{len(wanted) * 1.5 + n_sec * 0.6 + 3:.0f} USD für {len(wanted)} Publikationen. Die tatsächlichen "
-            "Kosten misst die App und zeigt sie nach jedem Lauf an; das Kostenlimit unten hält den Lauf "
-            "rechtzeitig an.")
+    # Je Publikation: kritische Würdigung 1,5–2,0 USD (im Sparmodus rund die Hälfte) plus Kürzen, Übersetzen und
+    # Stil 0,2–0,3 USD; dazu je Abschnitt Kommentare, Überleitungen und Prüfungen (Kostenprüfung vom 13.11.2026,
+    # hochgerechnet aus einem Projekt mit 28 Würdigungen – nach den ersten Läufen durch Messwerte ersetzen)
+    st.info(f"Grobe Schätzung der KI-Kosten für Schritt 2: etwa {len(wanted) * 1.7 + n_sec * 0.3 + 1:.0f}–"
+            f"{len(wanted) * 2.3 + n_sec * 0.6 + 3:.0f} USD für {len(wanted)} Publikationen, im Sparmodus etwa "
+            f"{len(wanted) * 1.0 + n_sec * 0.3 + 1:.0f}–{len(wanted) * 1.3 + n_sec * 0.6 + 3:.0f} USD (Grundlage: "
+            "Kostenprüfung vom 13.11.2026, hochgerechnet aus einem Projekt; der größte Teil entfällt auf die "
+            "kritischen Würdigungen). Die tatsächlichen Kosten misst die App und zeigt sie je Arbeitsschritt in "
+            "der Seitenleiste an; das Kostenlimit unten hält den Lauf rechtzeitig an.")
     need_pdf = [p for p in wanted if proj["pubs"].get(p, {}).get("fulltext_source") == "Upload"
                 or (not proj["pubs"].get(p, {}).get("full_text") and not proj["records"].get(p, {}).get("is_oa"))]
     if need_pdf:
@@ -839,6 +909,27 @@ if any("recommended" in t for t in proj["topics"].values()):
         opt_ccomm = k2.checkbox("Kommentar kompakt: nur die wichtigste Einordnung", value=bool(_cmp.get("comment")),
                                 help="Lang: 2 Sätze. Bereits gekürzte "
                                      "Würdigungen werden bei einer Änderung neu gekürzt (ca. 0,3 USD je Publikation).")
+        opt_batch = st.checkbox(
+            "Sparmodus: kritische Würdigungen als Sammelauftrag zum halben Preis (Ergebnis meist innerhalb einer "
+            "Stunde, spätestens nach 24 Stunden)", value=bool(proj.get("batch_step2")),
+            help="Die kritischen Würdigungen sind der teuerste Teil (rund 70 % der Kosten). Im Sparmodus gehen sie "
+                 "gesammelt an die KI und kosten die Hälfte; Vorgabe, Websuche und Qualität sind dieselben wie im "
+                 "direkten Ablauf. Alles Weitere (Kürzen, Übersetzen, Stil, Zusammensetzen) läuft danach wie "
+                 "gewohnt. Sie können das Fenster schließen; die App holt das Ergebnis ab. Speichern Sie vorher "
+                 "den Zwischenstand; damit findet die App den Sammelauftrag auch nach einem Neustart wieder und "
+                 "nichts wird doppelt bezahlt – auch wenn Sie danach ohne Sparmodus weitermachen. Das Kostenlimit "
+                 "gilt schon beim Einreichen: Die App reicht nur so viele Würdigungen ein, wie nach Schätzung "
+                 "(ca. 0,9 USD je Würdigung) hineinpassen.")
+        opt_lean = st.checkbox(
+            "Schlanke Würdigung für Kurznachrichten (ohne Websuche; bitte erst nach dem Vergleich unten einschalten)",
+            value=bool(proj.get("lean_news")),
+            help="Eine Kurznachricht besteht aus höchstens drei Sätzen: Ziel, Design, Patientenzahl und die "
+                 "Hauptaussage. Dafür prüft die schlanke Würdigung Methodik, Validität und Schlussfolgerungen der "
+                 "Autoren wie bisher; Websuche, Leitlinienbezug und Kommentar entfallen. Gilt nur für einzeln "
+                 "stehende, als Kurznachricht geplante Publikationen ohne vorhandene Würdigung. Wird eine solche "
+                 "Publikation später länger geplant oder gemeinsam gewürdigt, erstellt die App die vollständige "
+                 "Würdigung nach. Ohne Häkchen werden vorhandene schlanke Würdigungen beim nächsten Lauf durch "
+                 "vollständige ersetzt (voller Preis je Würdigung).")
         b1, b2 = st.columns(2)
         opt_trial = b1.checkbox("Probelauf: nur erstes Thema, höchstens 2 Publikationen (empfohlen vor dem ersten "
                                 "vollständigen Lauf)", value=not out_any(proj))
@@ -849,7 +940,10 @@ if any("recommended" in t for t in proj["topics"].values()):
         ) if trial_topics else None
         opt_budget = b2.number_input("Kostenlimit für diesen Lauf (USD)", min_value=1, max_value=500, value=15,
                                      help="Ist das Limit erreicht, hält die App an. Alles Fertige bleibt erhalten; "
-                                          "ein erneuter Start setzt dort fort.")
+                                          "ein erneuter Start setzt dort fort. Im Sparmodus reicht die App nur so "
+                                          "viele Würdigungen ein, wie nach Schätzung ins Limit passen (ca. 0,9 USD "
+                                          "je Würdigung); für einen vollständigen Lauf das Limit entsprechend "
+                                          "höher setzen.")
         n_old = sum(1 for d in proj.get("pubs", {}).values()
                     if d.get("short_en") and d.get("short_v", 1) < pipeline.SHORT_VERSION)
         opt_reshorten = st.checkbox(
@@ -860,12 +954,39 @@ if any("recommended" in t for t in proj["topics"].values()):
 
     if go2 and ready:
         proj["compact_opts"] = {"stats": bool(opt_cstats), "comment": bool(opt_ccomm)}
+        proj["batch_step2"], proj["lean_news"] = bool(opt_batch), bool(opt_lean)
         llm = get_llm(float(opt_budget))
         if llm:
             run_with_status("Manuskript wird erstellt", lambda log: pipeline.run_manuscript(llm, proj, log, {
                 "sota": False, "transitions": opt_trans, "style": opt_style, "trial": opt_trial,
                 "trial_topic": opt_trial_topic, "own_refs": opt_own, "joint": opt_joint,
-                "reshorten": opt_reshorten, "compact_stats": opt_cstats, "compact_comment": opt_ccomm}), llm)
+                "reshorten": opt_reshorten, "compact_stats": opt_cstats, "compact_comment": opt_ccomm,
+                "batch": bool(opt_batch), "lean_news": bool(opt_lean)}), llm)
+
+    # 2c. Vergleich für die schlanke Würdigung (Entscheidungshilfe, bevor der Schalter oben genutzt wird)
+    with st.expander("🧪 Vergleich: Kurznachricht aus vollständiger und aus schlanker Würdigung",
+                     expanded=bool(proj.get("lean_test"))):
+        st.caption("Für drei als Kurznachricht geplante Publikationen erstellt die App die Kurznachricht zweimal: "
+                   "einmal aus der vollständigen kritischen Würdigung und einmal aus der schlanken. In der "
+                   "Word-Datei stehen beide Fassungen ohne Kennzeichnung nebeneinander, die Auflösung und die "
+                   "gemessenen Kosten stehen auf der letzten Seite. Die vollständigen Würdigungen bleiben im "
+                   "Projekt und werden später nicht noch einmal bezahlt. Wie beim Manuskript muss vorher die "
+                   "Themenzuordnung geprüft sein.")
+        if st.button("🧪 Vergleich für 3 Publikationen erstellen (ca. 6–7 USD; mit vorhandenen Würdigungen ca. 1 USD)",
+                     disabled=_running or not ready, key="lean_test_btn"):
+            _tlm = get_llm(LEAN_TEST_BUDGET_USD)
+            if _tlm:
+                run_with_status("Vergleich wird erstellt",
+                                lambda log: pipeline.run_lean_comparison(_tlm, proj, log), _tlm)
+        _cmp_docx = pipeline.lean_comparison_docx(proj)
+        if _cmp_docx:
+            st.download_button("⬇️ Vergleich als Word-Datei", _cmp_docx,
+                               f"Vergleich_Kurznachrichten_{date.today().isoformat()}.docx", DOCX_MIME,
+                               key="lean_test_dl")
+            _tc = (proj["lean_test"].get("costs") or {})
+            if _tc.get("full_usd") is not None and _tc.get("lean_usd") is not None:
+                st.caption(f"Gemessen: vollständige Würdigung ≈ {usd(_tc['full_usd'])} USD, schlanke Würdigung ≈ "
+                           f"{usd(_tc['lean_usd'])} USD je Publikation (direkter Aufruf).")
 
     out = proj.get("outputs") or {}
     partial = pipeline.partial_docx(proj) if any(d.get("body_en") for d in proj["pubs"].values()) else None

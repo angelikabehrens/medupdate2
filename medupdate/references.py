@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from . import prompts_new as P
@@ -50,31 +51,56 @@ def verify_entries(entries: list[str], known: dict[str, dict], email: str = "") 
     return out
 
 
-def apply_style(llm: LLM, entries: list[str], rules: dict, batch: int = 30) -> list[str]:
+REFS_CACHE_MAX = 3000
+
+
+def apply_style(llm: LLM, entries: list[str], rules: dict, batch: int = 30, cache: dict | None = None) -> list[str]:
+    """cache (optional, proj["build_cache"]["refs"]): bereits formatierte Einträge werden übernommen; an die KI
+    gehen nur neue. Das spart beim erneuten Erstellen und schon beim ersten Mal die zweite Formatierung derselben
+    Liste für die englische Fassung."""
     style = (rules or {}).get("citation_style", "").strip()
     if not style or not entries:
         return entries
+    examples = rules.get("citation_examples", "")
     out = list(entries)
-    for i in range(0, len(entries), batch):
-        chunk = entries[i:i + batch]
+
+    def key(entry: str) -> str:
+        return hashlib.md5(f"{style}|{examples}|{entry}".encode("utf-8")).hexdigest()[:20]
+
+    todo = list(range(len(entries)))
+    if cache is not None:
+        todo = []
+        for i, e in enumerate(entries):
+            k = key(e)
+            if k in cache:
+                out[i] = cache[k]
+            else:
+                todo.append(i)
+    for n in range(0, len(todo), batch):
+        idx = todo[n:n + batch]
+        chunk = [entries[i] for i in idx]
         block = "\n".join(f"{j + 1}|||{e}" for j, e in enumerate(chunk))
         try:
-            data = llm.json(P.reference_format_prompt(style, rules.get("citation_examples", ""), block),
+            data = llm.json(P.reference_format_prompt(style, examples, block),
                             FORMAT_SCHEMA, model=MODEL_FAST, max_tokens=12000, effort="low")
         except Exception:
             continue
         new = data.get("entries", [])
         if len(new) != len(chunk):
             continue
-        for j, (old, cand) in enumerate(zip(chunk, new)):
+        for i, old, cand in zip(idx, chunk, new):
             cand = re.sub(r"^\d+[.)]\s*", "", cand.split("|||")[-1]).strip()
             # Schutz: Zahlen (Jahr, Band, Seiten, PMID, DOI-Teile) dürfen sich nicht ändern
             if cand and _numbers(cand) <= _numbers(old) and len(cand) >= 0.6 * len(old):
-                out[i + j] = cand
+                out[i] = cand
+                if cache is not None:
+                    cache[key(old)] = cand
+                    while len(cache) > REFS_CACHE_MAX:
+                        cache.pop(next(iter(cache)))
     return out
 
 
-def make_formatter(llm: LLM, rules: dict, known: dict[str, dict], email: str):
+def make_formatter(llm: LLM, rules: dict, known: dict[str, dict], email: str, cache: dict | None = None):
     def _fmt(entries: list[str]) -> list[str]:
-        return apply_style(llm, verify_entries(entries, known, email), rules)
+        return apply_style(llm, verify_entries(entries, known, email), rules, cache=cache)
     return _fmt

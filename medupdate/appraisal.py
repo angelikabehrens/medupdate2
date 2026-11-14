@@ -18,7 +18,7 @@ from .citations import (
     _CITE_RE,
 )
 from .config import MODEL_FAST, MODEL_MAIN
-from .llm import LLM
+from .llm import STEP_APPRAISAL, STEP_APPRAISAL_LEAN, AccountError, Job, LLM, run_job
 
 # Höchstzahl Websuchen je kritischer Würdigung. Jede Suchrunde verarbeitet den ganzen Kontext erneut –
 # das ist der größte Kostenfaktor der App.
@@ -47,7 +47,9 @@ def background_block(docs: list[tuple[str, str]]) -> str:
     )
 
 
-def fix_citation_consistency(llm: LLM, text: str, sprache_kw: str) -> str:
+def fix_citation_consistency(llm: LLM, text: str, sprache_kw: str, strict: bool = False) -> str:
+    """strict: Konto- oder Kostenlimit-Stopps weiterreichen, statt den Text ungeprüft zu übernehmen (im
+    Sammelauftrag liegt die Antwort schon sicher im Projekt; die Prüfung wird beim nächsten Start nachgeholt)."""
     cited = extract_intext_citation_numbers(text)
     listed = extract_literature_list_numbers(text)
     if cited == listed:
@@ -60,20 +62,68 @@ def fix_citation_consistency(llm: LLM, text: str, sprache_kw: str) -> str:
                          model=MODEL_FAST, max_tokens=24000, effort="low")
         # Schutz vor Textverlust: eine Korrektur, die deutlich kürzer ist, wird verworfen
         return fixed if fixed and len(fixed) >= 0.85 * len(text) else text
+    except AccountError:
+        if strict:
+            raise
+        return text
     except Exception:
         return text
 
 
-def generate_appraisal(llm: LLM, entry: dict, docs: list[tuple[str, str]], sprache_kw: str = "Englisch") -> str:
-    """entry: title, journal, pubdate, pub_types, abstract, full_text (optional)."""
-    fulltext_block = (f"\nVolltext (Auszug, automatisch geladen oder hochgeladen):\n{entry['full_text']}\n"
-                      if entry.get("full_text") else "")
-    prompt = M.appraisal_prompt(entry, sprache_kw, fulltext_block, background_block(docs), max_websuchen=WEB_SEARCHES)
+# Geschätzte Kosten je Würdigung im Sammelauftrag (für das Kostenlimit vor dem Einreichen). Grundlage: eine
+# Messung im direkten Aufruf (≈ 1,70 USD, 11/2026); wird nach den ersten Sammelaufträgen nachgeführt.
+APPRAISAL_BATCH_USD = 0.9
+LEAN_BATCH_USD = 0.2
+LEAN_KIND = "lean"  # proj["pubs"][pmid]["appraisal_kind"]: schlanke Würdigung (nur für Kurznachrichten)
+
+
+def _fulltext_block(entry: dict) -> str:
+    return (f"\nVolltext (Auszug, automatisch geladen oder hochgeladen):\n{entry['full_text']}\n"
+            if entry.get("full_text") else "")
+
+
+def appraisal_job(entry: dict, docs: list[tuple[str, str]], sprache_kw: str = "Englisch", key: str = "w") -> Job:
+    """Die kritische Würdigung als Auftrag: läuft sofort (generate_appraisal) oder im Sammelauftrag.
+    entry: title, journal, pubdate, pub_types, abstract, full_text (optional)."""
+    prompt = M.appraisal_prompt(entry, sprache_kw, _fulltext_block(entry), background_block(docs),
+                                max_websuchen=WEB_SEARCHES)
     # Großzügiges Limit: abgeschnittene Würdigungen sind verlorenes Geld (Denken zählt mit); berechnet wird nur
     # die tatsächliche Länge
-    text = llm.text(prompt, model=MODEL_MAIN, web_search=WEB_SEARCHES, max_tokens=64000, effort="high")
-    text = fix_citation_consistency(llm, text, sprache_kw)
+    return Job(key=key, prompt=prompt, step=STEP_APPRAISAL, model=MODEL_MAIN, max_tokens=64000, effort="high",
+               web_search=WEB_SEARCHES, est_usd=APPRAISAL_BATCH_USD)
+
+
+def lean_appraisal_job(entry: dict, sprache_kw: str = "Englisch", key: str = "wl") -> Job:
+    """Schlanke Würdigung als Grundlage einer Kurznachricht (Sparmaßnahme 2026-11-13): Abschnitte 1–3 wie in
+    der vollständigen Würdigung und ein kurzes Fazit mit der Hauptaussage; ohne Websuche, Leitlinien,
+    Abschnitte 4–5, Kommentar und Literatur – diese Teile darf eine Kurznachricht ohnehin nicht enthalten."""
+    return Job(key=key, prompt=M.lean_appraisal_prompt(entry, sprache_kw, _fulltext_block(entry)),
+               step=STEP_APPRAISAL_LEAN, model=MODEL_MAIN, max_tokens=64000, effort="high", est_usd=LEAN_BATCH_USD)
+
+
+def finish_appraisal(llm: LLM, text: str, sprache_kw: str = "Englisch", strict: bool = False) -> str:
+    """Nachbearbeitung der KI-Antwort: Literaturziffern und Literaturliste angleichen (bei Bedarf ein kurzer
+    direkter KI-Aufruf), dann neu nummerieren."""
+    text = fix_citation_consistency(llm, text, sprache_kw, strict)
     return renumber_and_prune_citations(text)
+
+
+def generate_appraisal(llm: LLM, entry: dict, docs: list[tuple[str, str]], sprache_kw: str = "Englisch") -> str:
+    """entry: title, journal, pubdate, pub_types, abstract, full_text (optional)."""
+    return finish_appraisal(llm, run_job(llm, appraisal_job(entry, docs, sprache_kw)), sprache_kw)
+
+
+def generate_lean_appraisal(llm: LLM, entry: dict, sprache_kw: str = "Englisch") -> str:
+    return finish_lean_appraisal(run_job(llm, lean_appraisal_job(entry, sprache_kw)))
+
+
+def finish_lean_appraisal(text: str) -> str:
+    """Eine schlanke Würdigung hat keine Literaturliste; die Nachbearbeitung der Literaturziffern entfällt
+    (sie würde eine nummerierte Aufzählung im Text für eine Literaturliste halten)."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Die KI hat für die schlanke Würdigung keine (leere) Antwort geliefert.")
+    return text
 
 
 def translate_appraisal(llm: LLM, text: str, target_lang: str) -> str:
