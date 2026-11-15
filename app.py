@@ -476,7 +476,7 @@ if proj.get("toc"):
                     pipeline.fit_to_length(proj, log)
                 run_with_status("Auswahl wird angepasst", _refocus, _flm)
         _ext = pipeline.extension_pending(proj)
-        if _ext["widen"] or _ext["followup"]:
+        if _ext["widen"] or _ext["followup"] or _ext.get("net"):
             _parts = []
             _extra = 0
             if _ext["widen"]:
@@ -487,6 +487,10 @@ if proj.get("toc"):
                               "hohe Evidenz zuerst")
             if _ext["followup"]:
                 _parts.append(f"Nachsuche nach Folgepublikationen zu {_ext['followup']} guten Studien")
+            if _ext.get("net"):
+                _parts.append("Suche nach wichtigen Arbeiten außerhalb der Stichworte" +
+                              (f" je Hauptüberschrift ({_ext['net']})" if _ext["net"] > 1 else " im ganzen Kapitel"))
+                _extra += _ext["net"] * pipeline.SAFETY_MAX_CANDIDATES * 0.8
             _bx = bool(proj.get("batch_step1"))
             _usd = (_extra * RANK_USD * (0.5 if _bx else 1.0) + (0.5 if _ext["followup"] else 0))
             _ec1, _ec2 = st.columns([3, 1])
@@ -577,6 +581,9 @@ if proj.get("toc"):
             # (ein Teil der Kandidaten fällt vorher heraus, z.B. ohne Abstract: daher 0,75)
             _lo = sum(recommend.candidate_limit(proj["topics"][tid].get("plan_counts")) * RANK_USD * 0.75 + 0.1
                       for tid in _pending) * _f1 or 0.4 * _f1
+            if (proj.get("safety_net") or {}).get("version") != pipeline.SAFETY_VERSION:  # Suche je Hauptüberschrift
+                _lo += ((len(pipeline.safety_sections(proj)) or 1) * pipeline.SAFETY_MAX_CANDIDATES * 0.5
+                        * RANK_USD * _f1)
             _dec = 0 if _lo >= 10 else 1
             if p2.button("✅ Literatur bewerten und Leitlinien recherchieren (ca. "
                          f"{f'{_lo:.{_dec}f}'.replace('.', ',')}–"
@@ -594,9 +601,11 @@ if proj.get("toc"):
                        "Geänderte Suchen werden beim nächsten Bewerten neu ausgeführt, unveränderte Themen nicht.")
         _net = proj.get("safety_net")
         if _net:
-            st.caption(f"🛟 Sicherheitsnetz: {_net.get('n_new', 0)} zusätzliche Arbeiten bewertet, "
-                       f"{_net.get('assigned', 0)} einem Thema zugeordnet, {_net.get('orphans', 0)} als mögliches "
-                       "neues Thema (ganz unten, zunächst nicht im Manuskript).")
+            _ns = [f.get("title") for num, f in (_net.get("sections") or {}).items() if num]
+            st.caption("🛟 Sicherheitsnetz" + (f" je Hauptüberschrift ({', '.join(_ns)})" if _ns else "") +
+                       f": {_net.get('n_new', 0)} zusätzliche Arbeiten bewertet, "
+                       f"{_net.get('assigned', 0)} mit Priorität A einem Thema zugeordnet, {_net.get('orphans', 0)} "
+                       "als mögliches neues Thema (ganz unten, zunächst nicht im Manuskript).")
 
     lp = proj.get("length_plan") or {}
     plan_tiers = lp.get("tiers", {})

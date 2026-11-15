@@ -323,7 +323,7 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
             store(tid, res)
     apply_prior(proj, log, reselect=False)
     try:
-        run_safety_net(llm, proj, log)
+        run_safety_net(llm, proj, log, batch=batch)
     except AccountError:
         raise
     except Exception as ex:
@@ -489,7 +489,7 @@ def _rank_in_batch(llm, proj: dict, log, todo: list, known_of, store, chapter: s
         take(key, res)
 
 
-SAFETY_MAX_CANDIDATES = 60
+SAFETY_MAX_CANDIDATES = 100  # je Hauptüberschrift (bis 2026-11-14: 60 für das ganze Kapitel)
 
 
 def apply_prior(proj: dict, log=lambda m: None, reselect: bool = True) -> int:
@@ -536,52 +536,145 @@ def apply_prior(proj: dict, log=lambda m: None, reselect: bool = True) -> int:
     return len(total)
 
 
-def run_safety_net(llm: LLM, proj: dict, log) -> None:
-    """Kapitelweite Suchen (hohe Evidenz, Top-Journale, Anker allein). Neue Treffer, die in keiner Themensuche
-    vorkamen, werden für das ganze Kapitel bewertet. Arbeiten der Priorität A werden dem passenden Thema
-    zugeordnet; passen sie zu keinem, landen sie unter „Neue Themen außerhalb des Inhaltsverzeichnisses“
-    (zunächst nicht im Manuskript, die Autorin entscheidet)."""
+SAFETY_VERSION = 2       # 2: eigene Suche je Hauptüberschrift (Angelika 2026-11-15)
+SAFETY_MAX_SECTIONS = 12  # mehr Hauptabschnitte: eine Suche für das ganze Kapitel
+
+
+def safety_sections(proj: dict) -> list[dict]:
+    """Die Hauptüberschriften des Kapitels mit ihren Themen, in der Reihenfolge des Inhaltsverzeichnisses:
+    [{"number", "title", "topics": [Gliederungspfade]}]. Ist das Kapitel nicht in mehrere Hauptabschnitte mit
+    jeweils mehreren Themen gegliedert (oder sind es sehr viele), bleibt es bei einer Suche für das ganze
+    Kapitel (leere Liste)."""
+    secs: dict[str, dict] = {}
+    for _, t in _search_topics(proj):
+        num = (t.get("section_number") or t.get("section_title") or "").strip()
+        if not num:
+            return []
+        s = secs.setdefault(num, {"number": num, "title": t.get("section_title") or num, "topics": []})
+        s["topics"].append(recommend.topic_path(t))
+    if len(secs) < 2 or len(secs) > SAFETY_MAX_SECTIONS or all(len(s["topics"]) < 2 for s in secs.values()):
+        return []
+    return list(secs.values())
+
+
+def _net_rank(llm: LLM, proj: dict, log, groups: list[tuple[str, dict, str, list[dict], str]],
+              batch: bool) -> dict[str, dict[str, dict]]:
+    """Bewertet die Kandidaten mehrerer Suchen (je Hauptüberschrift) – im Sparmodus als Sammelauftrag.
+    groups: [(Kennung, Thema, PICO, Datensätze, Zeitraum)]. Gibt {Kennung: {PMID: Bewertung}} zurück."""
+    jobs, owner = [], {}
+    for gid, topic, pico, recs, period in groups:
+        for job, valid in recommend.rank_jobs(topic, pico, recs, period, key=f"n|{gid}"):
+            jobs.append(job)
+            owner[job.key] = (gid, valid)
+    out: dict[str, dict[str, dict]] = {gid: {} for gid, *_ in groups}
+    done: set[str] = set()
+    if batch and hasattr(llm, "run_batch") and jobs:
+        state = proj.setdefault("batch", {}).setdefault("n", {})
+        for key, res in llm.run_batch(jobs, prefix=f"{proj['id']}-n", state=state, log=log):
+            if not isinstance(res, Exception):
+                gid, valid = owner[key]
+                out[gid].update(recommend.rank_items(res, valid))
+                done.add(key)
+    rest = [(job.key, job) for job in jobs if job.key not in done]  # direkt (oder im Sammelauftrag gescheitert)
+    for key, res in _parallel(rest, lambda job: run_job(llm, job), log, "Sicherheitsnetz").items():
+        if isinstance(res, Exception):
+            _err(proj, "Sicherheitsnetz", res)
+            continue
+        gid, valid = owner[key]
+        out[gid].update(recommend.rank_items(res, valid))
+    return out
+
+
+def run_safety_net(llm: LLM, proj: dict, log, batch: bool = False) -> None:
+    """Suchen über die Themen hinaus (hohe Evidenz, Top-Journale, Suchbegriff allein): seit 2026-11-15 je
+    Hauptüberschrift (z.B. 8.1 Atopische Dermatitis, 8.2 Kontaktekzem) mit bis zu SAFETY_MAX_CANDIDATES neuen
+    Kandidaten, sonst für das ganze Kapitel mit dem Kapitel-Anker. Neue Treffer, die in keiner Themensuche
+    vorkamen, werden bewertet. Arbeiten der Priorität A werden dem passenden Thema zugeordnet; passen sie zu
+    keinem, landen sie unter „Neue Themen außerhalb des Inhaltsverzeichnisses“ (zunächst nicht im Manuskript,
+    die Autorin entscheidet). Ergebnisse werden je Hauptüberschrift gemerkt (gleiche Suche: keine Kosten)."""
     frame = proj.get("search_frame")
-    queries = recommend.safety_queries(frame or {})
-    if not queries:
+    if not frame:
         return
     rules = proj.get("rules") or {}
     von, bis = recommend.search_window(rules, proj.get("search_window"))
     topics = _search_topics(proj)
-    key = json.dumps([[q["query"] for q in queries], von.isoformat(), bis.isoformat(), sorted(tid for tid, _ in topics)])
+    chapter = (proj["toc"] or {}).get("chapter_title", "")
     net = proj.get("safety_net") or {}
-    if net.get("key") != key:
-        known = set()
-        for tid, t in proj["topics"].items():
-            if tid != SAFETY:
-                known.update(p for p, it in t.get("ranking", {}).items() if it.get("via") != "Sicherheitsnetz")
-                known.update(t.get("prior_excluded", {}))
-        log("Sicherheitsnetz: kapitelweite Suche nach weiteren wichtigen Arbeiten…")
+    if net.get("version") != SAFETY_VERSION:
+        net = {"version": SAFETY_VERSION, "sections": {}}
+    secs = safety_sections(proj)
+    if secs:
+        sig = [[s["number"], s["title"], s["topics"]] for s in secs]
+        if net.get("section_sig") != sig:  # Gliederung neu oder geändert: Suchbegriffe je Hauptüberschrift
+            log("Sicherheitsnetz: Suchbegriffe je Hauptüberschrift werden erstellt…")
+            net["section_queries"] = recommend.section_queries(llm, chapter, frame, secs)
+            net["section_sig"] = sig
+        plan = [(s["number"], s["title"], net["section_queries"].get(s["number"], ""), s["topics"]) for s in secs]
+        plan = [x for x in plan if x[2]] or [("", chapter, frame.get("anchor_query", ""),
+                                               [recommend.topic_path(t) for _, t in topics])]
+    else:
+        plan = [("", chapter, frame.get("anchor_query", ""), [recommend.topic_path(t) for _, t in topics])]
+    plan = [x for x in plan if (x[2] or "").strip()]
+    if not plan:
+        return
+    known = set()
+    for tid, t in proj["topics"].items():
+        if tid != SAFETY:
+            known.update(p for p, it in t.get("ranking", {}).items() if it.get("via") != "Sicherheitsnetz")
+            known.update(t.get("prior_excluded", {}))
+    period = f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}"
+    tkey = sorted(tid for tid, _ in topics)
+    old, cur, groups, fresh = net.get("sections") or {}, {}, [], {}
+    for num, title, query, paths in plan:
+        queries = recommend.safety_queries(frame, query)
+        key = json.dumps([[q["query"] for q in queries], von.isoformat(), bis.isoformat(), tkey])
+        if old.get(num, {}).get("key") == key:
+            cur[num] = old[num]
+            known.update(cur[num].get("items", {}))
+            continue
+        log(f"Sicherheitsnetz: Suche nach weiteren wichtigen Arbeiten – {title}…")
         pmids, stats = recommend.collect_candidates({"queries": queries}, von, bis, proj["email"],
                                                     limit=SAFETY_MAX_CANDIDATES * 3)
         new = [p for p in pmids if p not in known][:SAFETY_MAX_CANDIDATES]
         records = pubmed.fetch_records(new, proj["email"]) if new else {}
         cands = recommend.prefilter([records[p] for p in new if p in records
                                      and not prior.match(records[p], proj.get("prior"))])
-        chapter = (proj["toc"] or {}).get("chapter_title", "")
-        pico = "Alle Themen des Kapitels: " + "; ".join(recommend.topic_path(t) for _, t in topics)
-        ranking = recommend.rank(llm, {"title": f"{chapter} (gesamtes Kapitel)"}, pico, cands,
-                                 f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}") if cands else {}
+        known.update(c["pmid"] for c in cands)
+        label = f"{chapter} – {title}" if num else f"{chapter} (gesamtes Kapitel)"
+        pico = (f"Alle Themen des Hauptabschnitts „{title}“: " if num else "Alle Themen des Kapitels: ") + "; ".join(paths)
+        groups.append((num or "kapitel", {"title": label}, pico, cands, period))
+        fresh[num] = {"key": key, "title": title, "query": query, "hits": stats, "n_new": len(cands),
+                      "records": records}
+    rated = _net_rank(llm, proj, log, groups, batch) if any(g[3] for g in groups) else {}
+    top_all: dict[str, tuple[str, dict]] = {}
+    for num, f in fresh.items():
+        ranking = rated.get(num or "kapitel", {})
         recommend.select(ranking, 10 ** 6)  # berechnet Priorität und Längenwert
-        top = [p for p, it in ranking.items() if it.get("priority") == "A"]
-        assign = {}
-        if top:
-            topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
-            pubs_block = "\n".join(f"{p}: {records[p]['title']} – "
-                                   f"{' '.join(records[p].get('abstract', '').split())[:500]}" for p in top)
-            data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, max_tokens=4000,
-                            effort="low")
-            valid = {tid for tid, _ in topics}
-            assign = {a["key"]: a["topic_id"] for a in data.get("assignments", []) if a.get("topic_id") in valid}
-        proj["records"].update({p: records[p] for p in top if p in records})
-        net = {"key": key, "hits": stats, "n_new": len(cands), "window": [von.isoformat(), bis.isoformat()],
-               "items": {p: {"topic": assign.get(p, ""), "item": {**ranking[p], "via": "Sicherheitsnetz"}} for p in top}}
-        proj["safety_net"] = net
+        for p, it in ranking.items():
+            if it.get("priority") == "A" and p in f["records"]:
+                top_all[p] = (num, it)
+    assign = {}
+    if top_all:
+        recs = {p: r for f in fresh.values() for p, r in f["records"].items()}
+        topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
+        pubs_block = "\n".join(f"{p}: {recs[p]['title']} – "
+                               f"{' '.join(recs[p].get('abstract', '').split())[:500]}" for p in top_all)
+        data = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, max_tokens=4000,
+                        effort="low")
+        valid = {tid for tid, _ in topics}
+        assign = {a["key"]: a["topic_id"] for a in data.get("assignments", []) if a.get("topic_id") in valid}
+        proj["records"].update({p: recs[p] for p in top_all})
+    for num, f in fresh.items():
+        records = f.pop("records")
+        f["items"] = {p: {"topic": assign.get(p, ""), "item": {**it, "via": "Sicherheitsnetz"}}
+                      for p, (n_, it) in top_all.items() if n_ == num and p in records}
+        cur[num] = f
+    net["sections"] = cur
+    net["items"] = {p: e for f in cur.values() for p, e in f.get("items", {}).items()}
+    net["n_new"] = sum(f.get("n_new", 0) for f in cur.values())
+    net["hits"] = {(f"{num} {k}" if num else k): v for num, f in cur.items() for k, v in f.get("hits", {}).items()}
+    net["window"] = [von.isoformat(), bis.isoformat()]
+    proj["safety_net"] = net
     # Zuordnung anwenden (auch nach einer erneuten Themensuche, ohne neue Kosten)
     n = rules.get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
     valid = {tid for tid, _ in topics}
@@ -607,7 +700,9 @@ def run_safety_net(llm: LLM, proj: dict, log) -> None:
         sf["recommended"] = sorted(orphans, key=lambda p: -sf["ranking"][p].get("length_score", 0))
         sf["reserve"] = []
         sf.update({"window": net.get("window", ["", ""]), "n_candidates": net.get("n_new", 0),
-                   "query_hits": net.get("hits", {}), "plan": {"queries": queries}})
+                   "query_hits": net.get("hits", {}),
+                   "plan": {"queries": [q for f in cur.values()
+                                        for q in recommend.safety_queries(frame, f.get("query"))]}})
     else:
         proj["topics"].pop(SAFETY, None)
     net["assigned"], net["orphans"] = len(net.get("items", {})) - len(orphans), len(orphans)
@@ -866,8 +961,11 @@ def extension_pending(proj: dict) -> dict:
     widen = [tid for tid, t in _search_topics(proj) if "recommended" in t and t.get("searchable") is not False
              and t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
              and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15]
-    return {"widen": widen, "followup": followup_pending(proj) if any(t.get("ranking") for _, t in
-                                                                       _search_topics(proj)) else 0}
+    ranked = any(t.get("ranking") for _, t in _search_topics(proj))
+    net = 0
+    if ranked and proj.get("search_frame") and (proj.get("safety_net") or {}).get("version") != SAFETY_VERSION:
+        net = len(safety_sections(proj)) or 1  # Suche je Hauptüberschrift (2026-11-15) noch nicht gelaufen
+    return {"widen": widen, "followup": followup_pending(proj) if ranked else 0, "net": net}
 
 
 def run_reroute(llm: LLM, proj: dict, log) -> None:

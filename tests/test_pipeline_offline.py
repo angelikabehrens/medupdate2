@@ -157,6 +157,9 @@ class FakeLLM:
             return {"index": 0, "typ": "Abbildung", "caption_en": "Kaplan-Meier curve", "caption_de": "Kaplan-Meier-Kurve"}
         if "assignments" in props:
             return {"assignments": []}
+        if "sections" in props:  # Suchbegriffe je Hauptüberschrift (Sicherheitsnetz)
+            nums = re.findall(r"^(\d+(?:\.\d+)*): ", p, re.MULTILINE)
+            return {"sections": [{"number": n, "title_en": f"section {n}", "query": f"S{n}[tiab]"} for n in nums]}
         if "befunde" in props:
             return {"befunde": []}
         if "kind" in props:
@@ -1047,6 +1050,81 @@ def test_huge_topics_evidence_first():
         pubmed.search, pubmed.fetch_records = orig
 
 
+def test_safety_net_per_section():
+    """Angelika 2026-11-15: eigene Suche je Hauptüberschrift (hohe Evidenz, Top-Journale, Suchbegriff allein)
+    mit bis zu 100 neuen Kandidaten; Arbeiten mit Priorität A werden zugeordnet oder als neues Thema angeboten;
+    gleiche Suche = keine neuen Kosten; ältere Projekte bekommen „Suche erweitern“ angeboten."""
+    calls = {"sections": 0, "rank": [], "search": []}
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema["properties"]
+            if "sections" in props:
+                calls["sections"] += 1
+                assert "8.1: Atopische Dermatitis" in prompt and "Atopische Dermatitis › Systemtherapie" in prompt
+                return {"sections": [{"number": "8.1", "title_en": "atopic dermatitis", "query": "AD[tiab]"},
+                                     {"number": "8.2", "title_en": "contact dermatitis", "query": "CD[tiab]"}]}
+            if "items" in props:
+                ids = re.findall(r"PMID: (\S+)", prompt)
+                calls["rank"].append(("Atopische Dermatitis" if "Hauptabschnitts „Atopische Dermatitis“" in prompt
+                                      else "Kontaktekzem" if "Hauptabschnitts „Kontaktekzem“" in prompt else "?"))
+                return {"items": [{"pmid": i, "study_design": "RCT", "relevance": 90, "evidence": 90,
+                                   "risk_of_bias": "Low", "novelty": 85, "practice_impact": 90 if i.endswith("0") else 40,
+                                   "question_importance": 80, "journal_impact_factor": 10.0, "question_key": i,
+                                   "is_primary_research": True, "rationale": "r"} for i in ids]}
+            if "assignments" in props:
+                keys = re.findall(r"^(\S+): ", prompt.split("Publikationen")[-1], re.MULTILINE)
+                return {"assignments": [{"key": k, "topic_id": "T1" if k.startswith("AD") else ""} for k in keys]}
+            raise AssertionError(list(props))
+
+    def fake_search(q, retmax, email=""):
+        calls["search"].append(q)
+        tag = "AD" if "AD[tiab]" in q else "CD"
+        ids = [f"{tag}{i}" for i in range(400)] + ["SHARED"]
+        return ids[:retmax], 5000
+
+    def rec(p):
+        return {"pmid": p, "title": f"T {p}", "abstract": "a" * 400, "pub_types": [], "language": "eng",
+                "journal": "J", "year": "2026"}
+
+    orig = (pubmed.search, pubmed.fetch_records)
+    pubmed.search = fake_search
+    pubmed.fetch_records = lambda ids, email="": {i: rec(i) for i in ids}
+    try:
+        proj = pipeline.new_project()
+        proj["email"] = "x@y.z"
+        proj["toc"] = {"chapter_title": "Atopie und Ekzemerkrankungen"}
+        proj["search_frame"] = {"anchor_query": "eczema[tiab]", "journals": ["Br J Dermatol"]}
+        proj["topics"] = {
+            "T1": {"id": "T1", "title": "Systemtherapie", "section_number": "8.1",
+                   "section_title": "Atopische Dermatitis", "ranking": {"AD1": {"via": ""}}},
+            "T2": {"id": "T2", "title": "Topika", "section_number": "8.1", "section_title": "Atopische Dermatitis"},
+            "T3": {"id": "T3", "title": "Epikutantest", "section_number": "8.2", "section_title": "Kontaktekzem"},
+            "T4": {"id": "T4", "title": "Beruf", "section_number": "8.2", "section_title": "Kontaktekzem"}}
+        proj["safety_net"] = {"key": "alt", "items": {}}  # Stand bis 2026-11-14: eine Suche für das Kapitel
+        assert pipeline.extension_pending(proj)["net"] == 2
+        pipeline.run_safety_net(L(), proj, lambda *a: None)
+        net = proj["safety_net"]
+        assert calls["sections"] == 1 and set(net["sections"]) == {"8.1", "8.2"}
+        assert any(q.startswith("((AD[tiab]) AND (randomized") for q in calls["search"])
+        assert any("\"Br J Dermatol\"[ta]" in q and "CD[tiab]" in q for q in calls["search"])
+        assert net["sections"]["8.1"]["n_new"] == 100 and net["sections"]["8.2"]["n_new"] == 100
+        assert "AD1" not in net["sections"]["8.1"]["items"] and "AD0" in net["sections"]["8.1"]["items"], "AD1 schon im Thema bewertet"
+        # A (Praxisrelevanz 90) bei PMIDs auf 0: AD-Arbeiten ins Thema T1, CD-Arbeiten als neues Thema
+        assert "AD10" in proj["topics"]["T1"]["ranking"] and proj["topics"]["T1"]["ranking"]["AD10"]["via"] == "Sicherheitsnetz"
+        assert "CD10" in proj["topics"][pipeline.SAFETY]["ranking"] and net["orphans"] > 0
+        assert any("Atopische Dermatitis" in r for r in calls["rank"]) and any("Kontaktekzem" in r for r in calls["rank"])
+        assert pipeline.extension_pending(proj)["net"] == 0
+        n_rank = len(calls["rank"])
+        pipeline.run_safety_net(L(), proj, lambda *a: None)  # gleiche Suche: gemerkt, keine Kosten
+        assert len(calls["rank"]) == n_rank and calls["sections"] == 1
+        # Ein Kapitel ohne Gliederung in Hauptabschnitte mit mehreren Themen: eine Suche mit dem Kapitel-Anker
+        proj2 = {"topics": {"A": {"title": "a", "section_number": "1"}, "B": {"title": "b", "section_number": "2"}}}
+        assert pipeline.safety_sections(proj2) == []
+    finally:
+        pubmed.search, pubmed.fetch_records = orig
+
+
 def test_focus_followup_window():
     """Angelika 2026-11-10 (Validierung an drei Kapiteln): Schalter „Interventionelle Studien abwerten“,
     Nachsuche nach Folgepublikationen großer Studien, Warnung beim Suchzeitraum."""
@@ -1233,6 +1311,7 @@ if __name__ == "__main__":
     test_toc_merge()
     test_chapter_selection()
     test_huge_topics_evidence_first()
+    test_safety_net_per_section()
     test_focus_followup_window()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()

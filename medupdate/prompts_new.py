@@ -92,6 +92,28 @@ schon im Anker steckt (z.B. bei einem Krankheitskapitel das Thema „Offene Repa
    - "note": optional ein kurzer deutscher Hinweis (z.B. warum nicht suchbar)."""
 
 
+def section_query_prompt(chapter: str, anchor: str, sections_block: str) -> str:
+    return f"""Du bist Informationsspezialist für medizinische Literaturrecherche (PubMed/MEDLINE). Für ein \
+ärztliches Fortbildungshandbuch wird zu jedem Thema des Inhaltsverzeichnisses eine eigene PubMed-Suche \
+durchgeführt. Zusätzlich soll je Hauptabschnitt eine breite Suche wichtige neue Arbeiten finden, die zu \
+keinem der aufgeführten Themen passen (z.B. ein neues Medikament oder eine neue Fragestellung im Fachgebiet). \
+Die App hängt an diese Suche selbst Filter für hohe Evidenz bzw. führende Journale an.
+
+Kapitel: {chapter or "(nicht angegeben)"}
+Kapitel-Anker (PubMed): {anchor or "(keiner)"}
+Hauptabschnitte mit ihren Themen:
+{sections_block}
+
+Für JEDEN Hauptabschnitt ein Eintrag in "sections" mit seiner Nummer ("number" genau wie angegeben):
+- "title_en": englischer Titel des Hauptabschnitts.
+- "query": PubMed-Suchstring für das GESAMTE Fachgebiet des Hauptabschnitts, nicht nur für die aufgeführten \
+Themen: die Erkrankung, das Organ oder das Verfahren, um das es im Abschnitt geht, mit MeSH ([Mesh]) UND \
+Freitext ([tiab]), Synonyme und Abkürzungen ODER-verknüpft (die neuesten Arbeiten sind oft noch nicht \
+verschlagwortet). Nur MeSH-Begriffe, die es tatsächlich gibt. Keine Datums-, Sprach- oder Studientypfilter. \
+Ist der Abschnitt mit dem Kapitel-Anker gleichbedeutend, nimm den Anker. Ist der Abschnitt kein \
+recherchierbares Fachgebiet (z.B. „Kuriosa“, „Diverses“, „Hot Topics“), gib einen leeren String zurück."""
+
+
 def search_plan_prompt(topic: str, focus: str, chapter: str, von: str, bis: str, path: str = "",
                        title_en: str = "", anchor: str = "", aspect: str = "", structure: str = "") -> str:
     frame = ""

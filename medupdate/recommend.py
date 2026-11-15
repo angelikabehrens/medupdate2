@@ -136,10 +136,26 @@ SAFETY_HIGH_EVIDENCE = ("(randomized controlled trial[pt] OR meta-analysis[pt] O
                         "guideline[pt] OR practice guideline[pt] OR consensus[tiab])")
 
 
-def safety_queries(frame: dict) -> list[dict]:
-    """Sicherheitsnetz je Kapitel: findet auch Arbeiten zu Themen, die (noch) nicht im Inhaltsverzeichnis
-    stehen. Hohe Evidenz, Top-Journale und der Anker allein."""
-    anchor = (frame.get("anchor_query") or "").strip()
+SECTION_SCHEMA = obj({"sections": arr(obj({"number": STR, "title_en": STR, "query": STR}))})
+
+
+def section_queries(llm: LLM, chapter: str, frame: dict, sections: list[dict]) -> dict[str, str]:
+    """Ein Aufruf je Kapitel: je Hauptabschnitt ein breiter PubMed-Suchstring für sein ganzes Fachgebiet
+    (Angelika 2026-11-15: wichtige Arbeiten zu Themen, die nicht im Inhaltsverzeichnis stehen).
+    sections: [{"number", "title", "topics": [Gliederungspfade]}]. Gibt {Nummer: Suchstring} zurück."""
+    block = "\n".join(f"{s['number']}: {s['title']}\n" + "\n".join(f"  - {p}" for p in s["topics"])
+                      for s in sections)
+    data = llm.json(P.section_query_prompt(chapter, frame.get("anchor_query", ""), block), SECTION_SCHEMA,
+                    model=MODEL_MAIN, max_tokens=8000)
+    known = {s["number"] for s in sections}
+    return {x["number"]: (x.get("query") or "").strip() for x in data.get("sections", []) if x.get("number") in known}
+
+
+def safety_queries(frame: dict, query: str | None = None) -> list[dict]:
+    """Sicherheitsnetz: findet auch Arbeiten zu Themen, die (noch) nicht im Inhaltsverzeichnis stehen. Hohe
+    Evidenz, Top-Journale und der Suchbegriff allein. query: Suchstring eines Hauptabschnitts (sonst der
+    Kapitel-Anker)."""
+    anchor = (query if query is not None else frame.get("anchor_query") or "").strip()
     if not anchor:
         return []
     qs = [{"name": "netz_evidenz", "query": f"({anchor}) AND {SAFETY_HIGH_EVIDENCE}"}]

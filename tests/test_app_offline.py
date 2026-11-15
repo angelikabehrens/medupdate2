@@ -176,15 +176,19 @@ def test_app_step1_savings():
         at = bench.open(proj)
         assert any(e.label.startswith("🔎 Suchplan prüfen – 4 Themen, 4 noch nicht bewertet") for e in at.expander)
         go = at.button(key="plan_go")
-        assert "2,6–4,6 USD" in go.label and not go.disabled, go.label
+        assert "4,4–7,8 USD" in go.label and not go.disabled, go.label
         at.checkbox(key="batch_step1_plan_0").check().run()
         _ok(at)
         go = at.button(key="plan_go")
-        assert "1,7–3,1 USD" in go.label, "im Sparmodus etwa ein Drittel weniger"
+        assert "2,9–5,3 USD" in go.label, "im Sparmodus etwa ein Drittel weniger"
         assert _run_job(at, go) == ["Literatur wird bewertet – fertig."]
         assert proj["batch_step1"] is True and not proj["errors"], proj["errors"]
         reqs = bench.srv.batches["msgbatch_001"]["requests"]
-        assert bench.srv.created == 1 and len(reqs) == 12, "8 Bewertungsaufträge und 4 Leitliniensuchen"
+        assert len(reqs) == 12, "8 Bewertungsaufträge und 4 Leitliniensuchen"
+        net = [b for k, b in bench.srv.batches.items() if k != "msgbatch_001"]
+        assert bench.srv.created == 2 and net and all("-n-" in r["custom_id"] for r in net[0]["requests"]), \
+            "Suche je Hauptüberschrift ebenfalls im Sparmodus"
+        assert set(proj["safety_net"]["sections"]) == {"8.1", "8.2", "8.3"}
         assert all(t.get("n_candidates") == 20 and t.get("guidelines") for tid, t in proj["topics"].items()
                    if tid.startswith("T"))
         assert at.button(key="plan_go").disabled, "nichts mehr offen"
@@ -212,11 +216,11 @@ def test_app_step1_savings():
                     and not (c.key or "").startswith("batch_step1_plan")]
         assert len(form_box) == 1 and form_box[0].value is True, "Einstellung aus dem Projekt"
         assert _run_job(at, _one(at, "button", "🔍 Literatursuche starten")) == ["Schritt 1 läuft – fertig."]
-        assert bench.srv.created == 2 and len(bench.srv.batches["msgbatch_002"]["requests"]) == 2, \
-            "nur die zwei Bewertungsaufträge des geänderten Themas"
+        assert bench.srv.created == 3 and len(bench.srv.batches["msgbatch_003"]["requests"]) == 2, \
+            "nur die zwei Bewertungsaufträge des geänderten Themas; das Sicherheitsnetz ist gemerkt"
         assert not proj["errors"], proj["errors"]
         row = next(c for c in _sidebar(at) if c.startswith(f"**{L.STEP_RANK}**"))
-        assert "davon 10 im Sammelauftrag" in row, row  # 8 + 2 Bewertungsaufträge; Nachbewertungen laufen direkt
+        assert "davon 16 im Sammelauftrag" in row, row  # 8 + 2 Themen, 6 Sicherheitsnetz
 
 
 def test_app_failed_topic():

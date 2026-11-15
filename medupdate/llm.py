@@ -46,6 +46,7 @@ STEP_NAMES = {
     "recommend.analyze_chapter": "Suchplan",
     "recommend.plan_search": "Suchplan",
     "recommend.broaden_search": "Suchplan",
+    "recommend.section_queries": "Suchplan",
     "recommend.rank": STEP_RANK,
     "pipeline.run_safety_net": "Zuordnung neuer Themen",
     "pipeline.run_reroute": "Zuordnung zu passenderen Themen",
