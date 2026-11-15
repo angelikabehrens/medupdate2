@@ -636,8 +636,7 @@ if proj.get("toc"):
                     _found = [p for p, e in _its.items() if e.get("found")]
                     st.markdown(f"**{_oe.get('name', '')}:** {_oe.get('n_entries', 0)} Einträge · "
                                 f"{len(_found)} hatte die App schon gefunden · {len(_its) - len(_found)} neu bewertet · "
-                                f"{len([p for p in _its if p in _rec])} davon jetzt empfohlen · "
-                                f"{len(_oe.get('missing', []))} nicht in PubMed gefunden")
+                                f"{len([p for p in _its if p in _rec])} davon jetzt empfohlen")
                     for _p, _e in _its.items():
                         _r = proj["records"].get(_p, {})
                         _t = proj["topics"].get(_e.get("topic") or "", {}).get("title") or "Neue Themen"
@@ -647,10 +646,6 @@ if proj.get("toc"):
                                     f"{'schon gefunden' if _e.get('found') else 'neu'} · Priorität "
                                     f"{_it.get('priority', '?')} · {_r.get('title', _p)} ({_r.get('journal', '')} "
                                     f"{_r.get('year', '')}) → {_t}")
-                    if _oe.get("missing"):
-                        with st.popover(f"❓ {len(_oe['missing'])} nicht in PubMed gefunden"):
-                            for _m in _oe["missing"]:
-                                st.markdown(f"- {_m}")
 
     lp = proj.get("length_plan") or {}
     plan_tiers = lp.get("tiers", {})
@@ -729,8 +724,6 @@ if proj.get("toc"):
                         "Folgepublikation": "🔁 Folgepublikation einer großen Studie"}.get(it.get("via"), "")
                 if _via:
                     label += "  \n" + _via
-                if it.get("oe"):
-                    label += "  \n📋 auch in der OpenEvidence-Liste"
                 if pmid in limit_dropped:
                     label += f"  \n✂️ wegen der Vorgaben entfernt ({limit_dropped[pmid]})"
                 elsewhere = moved_to.get(pmid)
