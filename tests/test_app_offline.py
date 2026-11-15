@@ -192,6 +192,11 @@ def test_app_step1_savings():
         assert all(t.get("n_candidates") == 20 and t.get("guidelines") for tid, t in proj["topics"].items()
                    if tid.startswith("T"))
         assert at.button(key="plan_go").disabled, "nichts mehr offen"
+        assert any(e.label.startswith("📋 Publikationsliste aus OpenEvidence") for e in at.expander)
+        assert at.button(key="oe_go").disabled, "ohne Liste nichts zu tun"
+        at.text_area(key="oe_text").input("1. Smith A. Trial. N Engl J Med 2026.\n2. Doe B. Study. Lancet 2026.").run()
+        _ok(at)
+        assert not at.button(key="oe_go").disabled and "USD" in at.button(key="oe_go").label
         assert at.checkbox(key="batch_step1_plan_1").value is True
         # Sehr großes Thema aus einem älteren Lauf (100 Kandidaten): „Suche erweitern“ im Sparmodus
         t0 = proj["topics"][next(iter(proj["topics"]))]

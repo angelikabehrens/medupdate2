@@ -49,6 +49,7 @@ STEP_NAMES = {
     "recommend.section_queries": "Suchplan",
     "recommend.rank": STEP_RANK,
     "pipeline.run_safety_net": "Zuordnung neuer Themen",
+    "pipeline.run_oe_list": "Zuordnung neuer Themen",  # Auslesen und Zuordnen der OpenEvidence-Liste
     "pipeline.run_reroute": "Zuordnung zu passenderen Themen",
     "pipeline.run_followup": "Folgepublikationen großer Studien",
     "pipeline.classify_invasive": "Einstufung interventioneller Studien",

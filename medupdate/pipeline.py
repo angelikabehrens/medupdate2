@@ -328,6 +328,7 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
         raise
     except Exception as ex:
         _err(proj, "Sicherheitsnetz", ex)
+    apply_oe_list(proj)  # OpenEvidence-Liste nach der neuen Suche wieder einsetzen (ohne Kosten)
     try:
         run_reroute(llm, proj, log)
     except AccountError:
@@ -688,23 +689,8 @@ def run_safety_net(llm: LLM, proj: dict, log, batch: bool = False) -> None:
         if p not in t.setdefault("ranking", {}):
             t["ranking"][p] = e["item"]
             t["recommended"], t["reserve"] = recommend.select(t["ranking"], n)
-    if orphans:
-        sf = proj["topics"].setdefault(SAFETY, {
-            "id": SAFETY, "title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "number": "",
-            "english_search_focus": "", "section_number": "Neue Themen",
-            "section_title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "enabled": False, "safety": True,
-            "guidelines": []})
-        if set(sf.get("ranking", {})) != set(orphans):
-            sf.pop("selected", None)
-        sf["ranking"] = {p: net["items"][p]["item"] for p in orphans}
-        sf["recommended"] = sorted(orphans, key=lambda p: -sf["ranking"][p].get("length_score", 0))
-        sf["reserve"] = []
-        sf.update({"window": net.get("window", ["", ""]), "n_candidates": net.get("n_new", 0),
-                   "query_hits": net.get("hits", {}),
-                   "plan": {"queries": [q for f in cur.values()
-                                        for q in recommend.safety_queries(frame, f.get("query"))]}})
-    else:
-        proj["topics"].pop(SAFETY, None)
+    net["plan_queries"] = [q for f in cur.values() for q in recommend.safety_queries(frame, f.get("query"))]
+    refresh_new_topics(proj)
     net["assigned"], net["orphans"] = len(net.get("items", {})) - len(orphans), len(orphans)
     log(f"Sicherheitsnetz: {net.get('n_new', 0)} weitere Arbeiten bewertet, {net['assigned']} einem Thema "
         f"zugeordnet, {len(orphans)} als mögliches neues Thema.")
@@ -737,6 +723,161 @@ def _best_topics(proj: dict) -> dict[str, tuple[str, dict]]:
                     (cur[1].get("relevance", 0), cur[1].get("score", 0)):
                 best[p] = (tid, it)
     return best
+
+
+def refresh_new_topics(proj: dict) -> None:
+    """Thema „Neue Themen außerhalb des Inhaltsverzeichnisses“ (NEU) aus den Arbeiten ohne passendes Thema:
+    aus dem Sicherheitsnetz und aus der OpenEvidence-Liste. Zunächst nicht im Manuskript (die Autorin
+    entscheidet); ohne solche Arbeiten entfällt das Thema."""
+    valid = {tid for tid, _ in _search_topics(proj)}
+    net = proj.get("safety_net") or {}
+    oe = proj.get("oe_list") or {}
+    items = {p: e["item"] for p, e in net.get("items", {}).items() if e.get("topic") not in valid}
+    items.update({p: e["item"] for p, e in oe.get("items", {}).items()
+                  if e.get("item") and not e.get("found") and e.get("topic") not in valid})
+    if not items:
+        proj["topics"].pop(SAFETY, None)
+        return
+    sf = proj["topics"].setdefault(SAFETY, {
+        "id": SAFETY, "title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "number": "",
+        "english_search_focus": "", "section_number": "Neue Themen",
+        "section_title": "Neue Themen außerhalb des Inhaltsverzeichnisses", "enabled": False, "safety": True,
+        "guidelines": []})
+    if set(sf.get("ranking", {})) != set(items):
+        sf.pop("selected", None)
+    sf["ranking"] = items
+    sf["recommended"] = sorted(items, key=lambda p: -items[p].get("length_score", 0))
+    sf["reserve"] = []
+    sf.update({"window": net.get("window") or list(proj.get("search_window") or ["", ""]),
+               "n_candidates": net.get("n_new", 0) + len(oe.get("items", {})),
+               "query_hits": net.get("hits", {}), "plan": {"queries": net.get("plan_queries", [])}})
+
+
+# ----------------------------------------------------------------------
+# Publikationsliste aus OpenEvidence (Angelika 2026-11-15, freiwillig)
+# ----------------------------------------------------------------------
+OE_MAX = 60  # so viele Einträge einer Liste werden höchstens übernommen
+OE_SCHEMA = obj({"entries": arr(obj({"title": STR, "first_author": STR, "journal": STR, "year": STR,
+                                     "doi": STR, "pmid": STR}))})
+
+
+def run_oe_list(llm: LLM, proj: dict, text: str, name: str, log) -> None:
+    """Liest eine Publikationsliste (z. B. aus OpenEvidence kopiert oder als Datei) ein, findet die Arbeiten in
+    PubMed und gleicht sie mit den Treffern der App ab. Schon gefundene Arbeiten werden nur markiert; neue
+    werden dem passenden Thema zugeordnet und dort bewertet (ohne passendes Thema: „Neue Themen“). Danach
+    werden Empfehlung und Längenplan neu berechnet. Kosten: ein kurzer Aufruf zum Auslesen, einer zur
+    Zuordnung und die Bewertung der neuen Arbeiten (etwa 1–2 Cent je Arbeit)."""
+    log("Publikationsliste wird ausgelesen…")
+    data = llm.json(P.oe_list_prompt(text[:60000]), OE_SCHEMA, model=MODEL_FAST, max_tokens=16000, effort="low")
+    entries = [e for e in data.get("entries", []) if (e.get("title") or e.get("doi") or e.get("pmid"))][:OE_MAX]
+    log(f"{len(entries)} Einträge erkannt; Suche in PubMed…")
+    items: dict[str, dict] = {}
+    missing = []
+    for e in entries:
+        pm = re.sub(r"\D", "", e.get("pmid") or "")
+        if not pm:
+            try:
+                pm = pubmed.find_pmid(doi=(e.get("doi") or "").strip(), title=(e.get("title") or "").strip(),
+                                      email=proj["email"]) or ""
+            except Exception as ex:  # eine fehlgeschlagene Suche soll die übrigen nicht blockieren
+                _err(proj, "OpenEvidence-Liste (PubMed)", ex)
+                pm = ""
+        if pm and pm not in items:
+            items[pm] = {"entry": e}
+        elif not pm:
+            missing.append(" – ".join(x for x in (e.get("first_author"), e.get("title"), e.get("journal"),
+                                                  e.get("year")) if x))
+    topics = _search_topics(proj)
+    found_in: dict[str, tuple[str, float]] = {}
+    for tid, t in topics:
+        for pm, it in (t.get("ranking") or {}).items():
+            if pm in items and it.get("via") != "OpenEvidence":
+                if pm not in found_in or it.get("score", 0) > found_in[pm][1]:
+                    found_in[pm] = (tid, it.get("score", 0))
+    new = [pm for pm in items if pm not in found_in]
+    records = pubmed.fetch_records(new, proj["email"]) if new else {}
+    for pm in list(new):
+        if pm not in records:
+            missing.append(items.pop(pm)["entry"].get("title", pm))
+            new.remove(pm)
+    assign = {}
+    if new and topics:
+        topics_block = "\n".join(f"{tid}: {t.get('number', '')} {recommend.topic_path(t)}" for tid, t in topics)
+        pubs_block = "\n".join(f"{pm}: {records[pm].get('title', '')} – "
+                               f"{' '.join((records[pm].get('abstract') or '').split())[:500]}" for pm in new)
+        res = llm.json(P.topic_assign_prompt(topics_block, pubs_block), ASSIGN_SCHEMA, model=MODEL_FAST,
+                       max_tokens=4000, effort="low")
+        valid = {tid for tid, _ in topics}
+        assign = {a["key"]: a["topic_id"] for a in res.get("assignments", []) if a.get("topic_id") in valid}
+    von, bis = recommend.search_window(proj.get("rules") or {}, proj.get("search_window"))
+    period = f"von {von.strftime('%m/%Y')} bis {bis.strftime('%m/%Y')}"
+    chapter = (proj["toc"] or {}).get("chapter_title", "")
+    by_topic: dict[str, list[str]] = {}
+    for pm in new:
+        by_topic.setdefault(assign.get(pm, ""), []).append(pm)
+    if new:
+        log(f"{len(new)} Arbeiten der Liste waren noch nicht unter den Treffern der App und werden bewertet…")
+
+    def work(item):
+        tid, pms = item
+        t = proj["topics"].get(tid) or {"title": f"{chapter} (gesamtes Kapitel)"}
+        pico = ((t.get("plan") or {}).get("pico") or
+                "Alle Themen des Kapitels: " + "; ".join(recommend.topic_path(x) for _, x in topics))
+        recs = [records[p] for p in pms if len(records[p].get("abstract") or "") >= 100]  # Liste der Expertin: kein Typfilter
+        return recommend.rank(llm, t, pico, recs, period) if recs else {}
+
+    for tid, res in _parallel([(tid, (tid, pms)) for tid, pms in by_topic.items()], work, log,
+                              "Bewertung der OpenEvidence-Liste").items():
+        if isinstance(res, Exception):
+            _err(proj, "OpenEvidence-Liste (Bewertung)", res)
+            continue
+        recommend.select(res, 10 ** 6)  # berechnet Priorität und Längenwert
+        for pm, it in res.items():
+            items[pm].update({"topic": tid, "item": {**it, "via": "OpenEvidence"}})
+    for pm in new:
+        if "item" not in items[pm]:  # ohne Abstract oder nicht bewertbar
+            missing.append((records.get(pm) or {}).get("title", pm) + " (ohne Abstract, nicht bewertet)")
+            items.pop(pm)
+    for pm, (tid, _) in found_in.items():
+        items[pm].update({"topic": tid, "found": True})
+    proj["records"].update({pm: records[pm] for pm in items if pm in records})
+    proj["oe_list"] = {"name": name, "n_entries": len(entries), "missing": missing,
+                       "items": {pm: {k: v for k, v in e.items() if k != "entry"} for pm, e in items.items()}}
+    apply_oe_list(proj)
+    select_chapter(proj, log)
+    fit_to_length(proj, log)
+    oe = proj["oe_list"]
+    log(f"OpenEvidence-Liste: {len(entries)} Einträge, {len(found_in)} schon von der App gefunden, "
+        f"{len(oe['items']) - len(found_in)} neu bewertet, {len(missing)} nicht in PubMed gefunden.")
+
+
+def apply_oe_list(proj: dict) -> None:
+    """Überträgt die bewerteten Arbeiten der OpenEvidence-Liste in ihre Themen (auch nach einer erneuten
+    Literatursuche, ohne neue Kosten) und markiert schon gefundene Arbeiten."""
+    oe = proj.get("oe_list") or {}
+    items = oe.get("items", {})
+    n = (proj.get("rules") or {}).get("pubs_per_topic") or MAX_PUBS_PER_TOPIC
+    for tid, t in _search_topics(proj):
+        rk = t.get("ranking") or {}
+        for pm in [pm for pm, it in rk.items() if it.get("via") == "OpenEvidence" and pm not in items]:
+            rk.pop(pm)  # aus einer früheren Liste
+        for it in rk.values():
+            it.pop("oe", None)
+        for pm, e in items.items():
+            if pm not in rk:
+                if e.get("topic") == tid and e.get("item") and not e.get("found"):
+                    rk[pm] = dict(e["item"])
+            else:
+                rk[pm]["oe"] = True
+        if rk:
+            t["ranking"] = rk
+            if "recommended" in t:
+                t["recommended"], t["reserve"] = recommend.select(rk, n)
+    refresh_new_topics(proj)
+
+
+def oe_pmids(proj: dict) -> set[str]:
+    return set((proj.get("oe_list") or {}).get("items", {}))
 
 
 def select_chapter(proj: dict, log=lambda m: None) -> None:

@@ -278,6 +278,19 @@ Text:
 {head_text}"""
 
 
+def oe_list_prompt(text: str) -> str:
+    return f"""Der folgende Text enthält eine Liste wissenschaftlicher Publikationen, zum Beispiel aus einer \
+Antwort von OpenEvidence kopiert, als Literaturliste oder als Tabelle. Lies jede genannte Publikation als \
+eigenen Eintrag aus, in der Reihenfolge des Textes. Übernimm nur, was im Text steht; fehlende Angaben bleiben \
+leer. "title": vollständiger Titel der Arbeit (nicht der Studienname allein, außer es gibt keinen Titel). \
+"first_author": Nachname des Erstautors. "journal": Zeitschrift. "year": Erscheinungsjahr. "doi" und "pmid" \
+nur, wenn sie im Text stehen (auch aus Links wie doi.org/… oder pubmed.ncbi.nlm.nih.gov/…). Fließtext, \
+Erklärungen und Leitlinien ohne Publikationsangabe sind keine Einträge. Dieselbe Arbeit nur einmal.
+
+Text:
+{text}"""
+
+
 def topic_assign_prompt(topics_block: str, pubs_block: str) -> str:
     return f"""Ordne jede Publikation genau einem Thema des Handbuchkapitels zu. Wähle das Thema, zu \
 dem die Publikation inhaltlich am besten passt. Passt sie inhaltlich zu keinem Thema wirklich, gib die \

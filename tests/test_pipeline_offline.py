@@ -1125,6 +1125,82 @@ def test_safety_net_per_section():
         pubmed.search, pubmed.fetch_records = orig
 
 
+def test_oe_list():
+    """Angelika 2026-11-15: optionale Publikationsliste aus OpenEvidence. Schon gefundene Arbeiten werden markiert,
+    neue im passenden Thema bewertet, ohne passendes Thema unter „Neue Themen“; nicht auffindbare werden genannt;
+    nach einer neuen Suche bleibt alles ohne Kosten erhalten; eine neue Liste ersetzt die alte."""
+    calls = {"parse": 0, "rank": []}
+
+    class L:
+        def json(self, prompt, schema, **kw):
+            props = schema["properties"]
+            if "entries" in props:
+                calls["parse"] += 1
+                assert "OpenEvidence" in prompt
+                if "ZWEITE" in prompt:
+                    return {"entries": [{"title": "Neue Studie B", "first_author": "", "journal": "", "year": "",
+                                         "doi": "", "pmid": "502"}]}
+                return {"entries": [
+                    {"title": "Schon gefunden", "first_author": "A", "journal": "J", "year": "2026", "doi": "", "pmid": "100"},
+                    {"title": "Neue Studie A", "first_author": "B", "journal": "J", "year": "2026", "doi": "10.1/x", "pmid": ""},
+                    {"title": "Ganz anderes Thema", "first_author": "C", "journal": "J", "year": "2026", "doi": "", "pmid": "503"},
+                    {"title": "Gibt es nicht", "first_author": "D", "journal": "J", "year": "2026", "doi": "", "pmid": ""}]}
+            if "assignments" in props:
+                return {"assignments": [{"key": "501", "topic_id": "T1"}, {"key": "502", "topic_id": "T1"},
+                                        {"key": "503", "topic_id": ""}]}
+            if "items" in props:
+                ids = re.findall(r"PMID: (\d+)", prompt)
+                calls["rank"].append(ids)
+                return {"items": [{"pmid": i, "study_design": "RCT", "relevance": 90, "evidence": 90,
+                                   "risk_of_bias": "Low", "novelty": 85, "practice_impact": 90,
+                                   "question_importance": 80, "journal_impact_factor": 10.0, "question_key": i,
+                                   "is_primary_research": True, "rationale": "r"} for i in ids]}
+            raise AssertionError(list(props))
+
+    def rec(p):
+        return {"pmid": p, "title": f"T {p}", "abstract": "a" * 400, "pub_types": [], "language": "eng",
+                "journal": "J", "year": "2026", "authors": ["X Y"]}
+
+    orig = (pubmed.search, pubmed.fetch_records, pubmed.find_pmid)
+    pubmed.find_pmid = lambda doi="", title="", email="": "501" if doi == "10.1/x" else None
+    pubmed.fetch_records = lambda ids, email="": {i: rec(i) for i in ids}
+    try:
+        proj = pipeline.new_project()
+        proj["email"] = "x@y.z"
+        proj["toc"] = {"chapter_title": "Atopie"}
+        it = {"score": 80, "priority": "A", "relevance": 90, "evidence": 80, "practice_impact": 80, "novelty": 60,
+              "risk_of_bias": "Low", "question_importance": 70, "journal_impact_factor": 5, "is_primary_research": True,
+              "question_key": "q", "study_design": "RCT", "rationale": "r"}
+        proj["topics"] = {"T1": {"id": "T1", "title": "Systemtherapie", "plan": {"pico": "P"},
+                                 "ranking": {"100": dict(it)}, "recommended": ["100"], "reserve": []},
+                          "T2": {"id": "T2", "title": "Topika", "ranking": {}, "recommended": [], "reserve": []}}
+        proj["records"] = {"100": rec("100")}
+        pipeline.run_oe_list(L(), proj, "Antwort von OpenEvidence …", "oe.docx", lambda *a: None)
+        oe = proj["oe_list"]
+        assert oe["n_entries"] == 4 and set(oe["items"]) == {"100", "501", "503"}
+        assert oe["items"]["100"]["found"] and oe["items"]["100"]["topic"] == "T1"
+        assert len(oe["missing"]) == 1 and "Gibt es nicht" in oe["missing"][0]
+        t1 = proj["topics"]["T1"]
+        assert t1["ranking"]["100"].get("oe") is True
+        assert t1["ranking"]["501"]["via"] == "OpenEvidence" and t1["ranking"]["501"]["priority"] == "A"
+        neu = proj["topics"][pipeline.SAFETY]
+        assert "503" in neu["ranking"] and neu["enabled"] is False
+        assert sorted(sum(calls["rank"], [])) == ["501", "503"], "schon gefundene Arbeiten werden nicht neu bewertet"
+        assert pipeline.oe_pmids(proj) == {"100", "501", "503"}
+        # Neue Suche ersetzt die Rangliste des Themas: die Liste wird ohne Kosten wieder eingesetzt
+        n_rank = len(calls["rank"])
+        t1["ranking"] = {"100": dict(it)}
+        pipeline.apply_oe_list(proj)
+        assert "501" in t1["ranking"] and t1["ranking"]["100"]["oe"] and len(calls["rank"]) == n_rank
+        # Eine zweite Liste ersetzt die erste
+        pipeline.run_oe_list(L(), proj, "ZWEITE Liste von OpenEvidence", "eingefügter Text", lambda *a: None)
+        assert set(proj["oe_list"]["items"]) == {"502"}
+        assert "501" not in t1["ranking"] and "502" in t1["ranking"] and not t1["ranking"]["100"].get("oe")
+        assert pipeline.SAFETY not in proj["topics"], "ohne Arbeiten ohne Thema entfällt „Neue Themen“"
+    finally:
+        pubmed.search, pubmed.fetch_records, pubmed.find_pmid = orig
+
+
 def test_focus_followup_window():
     """Angelika 2026-11-10 (Validierung an drei Kapiteln): Schalter „Interventionelle Studien abwerten“,
     Nachsuche nach Folgepublikationen großer Studien, Warnung beim Suchzeitraum."""
@@ -1312,6 +1388,7 @@ if __name__ == "__main__":
     test_chapter_selection()
     test_huge_topics_evidence_first()
     test_safety_net_per_section()
+    test_oe_list()
     test_focus_followup_window()
     test_search_plan_and_safety_net()
     test_sota_trailing_note()

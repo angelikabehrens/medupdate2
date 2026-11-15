@@ -606,6 +606,51 @@ if proj.get("toc"):
                        f": {_net.get('n_new', 0)} zusätzliche Arbeiten bewertet, "
                        f"{_net.get('assigned', 0)} mit Priorität A einem Thema zugeordnet, {_net.get('orphans', 0)} "
                        "als mögliches neues Thema (ganz unten, zunächst nicht im Manuskript).")
+        if any(t.get("ranking") for _, t in _stopics):
+            _oe = proj.get("oe_list") or {}
+            with st.expander("📋 Publikationsliste aus OpenEvidence (freiwillig)"
+                             + (f" – {len(_oe.get('items', {}))} Arbeiten übernommen" if _oe else "")):
+                st.caption("Eine Liste von Publikationen, z. B. die Antwort von OpenEvidence auf „die 20 wichtigsten "
+                           "Publikationen zu … aus dem Zeitraum …“. Die App findet die Arbeiten in PubMed, markiert "
+                           "die, die sie schon gefunden hat, und bewertet die übrigen im passenden Thema (ohne "
+                           "passendes Thema unter „Neue Themen“). Eine neue Liste ersetzt die vorherige.")
+                _oe_file = st.file_uploader("Liste als Datei (Word, PDF oder Text)", type=["docx", "pdf", "txt", "md", "csv"],
+                                            key="oe_file", disabled=_running)
+                _oe_text = st.text_area("oder hier einfügen", key="oe_text", height=120, disabled=_running)
+                _oe_n = max(1, min(pipeline.OE_MAX, len((_oe_text or "").splitlines()) // 2 or 20))
+                if st.button(f"Liste einlesen und abgleichen (ca. {f'{0.05 + _oe_n * RANK_USD:.1f}'.replace('.', ',')}–"
+                             f"{f'{0.1 + _oe_n * RANK_USD * 2.5:.1f}'.replace('.', ',')} USD)", key="oe_go",
+                             disabled=_running or not (_oe_file or (_oe_text or "").strip())):
+                    _olm = get_llm()
+                    if _olm:
+                        if _oe_file:
+                            _oe_src, _oe_name = extract_text(_oe_file.name, _oe_file.read()), _oe_file.name
+                        else:
+                            _oe_src, _oe_name = _oe_text, "eingefügter Text"
+                        run_with_status("OpenEvidence-Liste wird abgeglichen",
+                                        lambda log, _t=_oe_src, _n=_oe_name: pipeline.run_oe_list(_olm, proj, _t, _n, log),
+                                        _olm)
+                if _oe:
+                    _its = _oe.get("items", {})
+                    _rec = {p for t in proj["topics"].values() for p in t.get("recommended", [])}
+                    _found = [p for p, e in _its.items() if e.get("found")]
+                    st.markdown(f"**{_oe.get('name', '')}:** {_oe.get('n_entries', 0)} Einträge · "
+                                f"{len(_found)} hatte die App schon gefunden · {len(_its) - len(_found)} neu bewertet · "
+                                f"{len([p for p in _its if p in _rec])} davon jetzt empfohlen · "
+                                f"{len(_oe.get('missing', []))} nicht in PubMed gefunden")
+                    for _p, _e in _its.items():
+                        _r = proj["records"].get(_p, {})
+                        _t = proj["topics"].get(_e.get("topic") or "", {}).get("title") or "Neue Themen"
+                        _it = ((proj["topics"].get(_e.get("topic") or "", {}).get("ranking") or {}).get(_p)
+                               or _e.get("item") or {})
+                        st.markdown(f"- {'✅ empfohlen' if _p in _rec else '☐ nicht empfohlen'} · "
+                                    f"{'schon gefunden' if _e.get('found') else 'neu'} · Priorität "
+                                    f"{_it.get('priority', '?')} · {_r.get('title', _p)} ({_r.get('journal', '')} "
+                                    f"{_r.get('year', '')}) → {_t}")
+                    if _oe.get("missing"):
+                        with st.popover(f"❓ {len(_oe['missing'])} nicht in PubMed gefunden"):
+                            for _m in _oe["missing"]:
+                                st.markdown(f"- {_m}")
 
     lp = proj.get("length_plan") or {}
     plan_tiers = lp.get("tiers", {})
@@ -665,7 +710,8 @@ if proj.get("toc"):
             ranking = t.get("ranking", {})
             moved_to = pipeline.current_topics(proj)
             limit_dropped = {e["id"]: e["reason"] for e in proj.get("limit_dropped", [])}
-            for pmid in dict.fromkeys(rec_ids + t.get("reserve", [])):
+            _oe_here = [p for p in ranking if p in pipeline.oe_pmids(proj)]  # immer sichtbar, auch ohne Empfehlung
+            for pmid in dict.fromkeys(rec_ids + t.get("reserve", []) + _oe_here):
                 rec = proj["records"].get(pmid, {})
                 it = ranking.get(pmid, {})
                 oa = " · 🔓 Open Access" if rec.get("is_oa") else ""
@@ -677,8 +723,14 @@ if proj.get("toc"):
                          f"{it.get('study_design', '')} · [PubMed](https://pubmed.ncbi.nlm.nih.gov/{pmid}/)"
                          + (f" · [DOI](https://doi.org/{rec['doi']})" if rec.get("doi") else "")
                          + f"  \n_{it.get('rationale', '')}_")
-                if it.get("via"):
-                    label += "  \n🛟 über das Sicherheitsnetz gefunden"
+                _via = {"Sicherheitsnetz": "🛟 über das Sicherheitsnetz gefunden",
+                        "OpenEvidence": "📋 aus der OpenEvidence-Liste (von der App nicht gefunden)",
+                        "Themenzuordnung": "↪ im passenderen Thema bewertet",
+                        "Folgepublikation": "🔁 Folgepublikation einer großen Studie"}.get(it.get("via"), "")
+                if _via:
+                    label += "  \n" + _via
+                if it.get("oe"):
+                    label += "  \n📋 auch in der OpenEvidence-Liste"
                 if pmid in limit_dropped:
                     label += f"  \n✂️ wegen der Vorgaben entfernt ({limit_dropped[pmid]})"
                 elsewhere = moved_to.get(pmid)
