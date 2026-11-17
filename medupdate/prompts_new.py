@@ -114,8 +114,34 @@ Ist der Abschnitt mit dem Kapitel-Anker gleichbedeutend, nimm den Anker. Ist der
 recherchierbares Fachgebiet (z.B. „Kuriosa“, „Diverses“, „Hot Topics“), gib einen leeren String zurück."""
 
 
+def _parts_task(parts: list[str], anchor: str) -> str:
+    teile = "; ".join(f"„{x}“" for x in parts)
+    return f"""Die Überschrift setzt sich aus mehreren Teilen zusammen: {teile}. Formuliere zusätzlich unter \
+"teilsuchen" je Teil GENAU eine präzise PubMed-Suche (Feld "teil": der Teil wörtlich wie oben, Feld "query": \
+die Suche). Jede Teilsuche verbindet {"den Kapitel-Anker" if anchor else "die Kapitelerkrankung"} mit AND mit \
+dem Konzept genau dieses Teils, gelesen im Zusammenhang der ganzen Überschrift und des Gliederungspfads (z. B. \
+„Chirurgie“ unter „Rektumkarzinom“: total mesorectal excision, robotic, laparoscopic, transanal, local excision \
+usw.). MeSH UND Freitext ([tiab]) mit Synonymen, englisch, keine Datums-, Sprach- oder Studientypfilter. Ziel: \
+Wichtige Studien zu einem Teil dürfen nicht fehlen, nur weil die übrigen Suchen vor allem die anderen Teile \
+abdecken."""
+
+
+def part_queries_prompt(topic: str, path: str, chapter: str, parts: list[str], anchor: str, precise: str) -> str:
+    return f"""Du bist Informationsspezialist für medizinische Literaturrecherche (PubMed/MEDLINE) und \
+ergänzt den Suchplan für ein ärztliches Fortbildungshandbuch.
+
+Kapitel: {chapter or "(nicht angegeben)"}
+Thema: {topic}
+Gliederungspfad im Kapitel: {path or topic}
+Kapitel-Anker (PubMed): {anchor or "(keiner)"}
+Bisherige präzise Suche: {precise or "(keine)"}
+
+{_parts_task(parts, anchor)}"""
+
+
 def search_plan_prompt(topic: str, focus: str, chapter: str, von: str, bis: str, path: str = "",
-                       title_en: str = "", anchor: str = "", aspect: str = "", structure: str = "") -> str:
+                       title_en: str = "", anchor: str = "", aspect: str = "", structure: str = "",
+                       parts: list[str] | None = None) -> str:
     frame = ""
     if anchor:
         frame = f"""
@@ -152,6 +178,7 @@ Varices"[Mesh]). Verwende nur MeSH-Begriffe, die es tatsächlich gibt; im Zweife
    Verwende korrekte PubMed-Syntax: Feld-Tags, OR innerhalb eines Konzepts, AND zwischen Konzepten, \
 Klammern. KEINE Datumsangaben und KEINE Sprachfilter in die Suchstrings schreiben – das ergänzt die App.
 4. Nenne Ausschlusskriterien (z.B. Tierstudien, pädiatrische Population, wenn nicht gemeint).
+{("5. " + _parts_task(parts, anchor)) if parts else ""}
 
 Hinweise: Die neuesten Arbeiten sind oft noch nicht mit MeSH verschlagwortet: jedes Konzept daher IMMER \
 auch als Freitext ([tiab]) mit Synonymen und Abkürzungen suchen, nie nur MeSH. \

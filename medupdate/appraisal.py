@@ -398,8 +398,12 @@ def estimate_pages(tiers: dict[str, str], n_sections: int) -> float:
 # Umfang je Stufe neu festgelegt (Angelika 2026-11-03): lang höchstens 1 Seite (Kommentar + Fazit), mittel
 # ½ Seite (Fazit), kurz ⅓ Seite (nur Fließtext), Kurznachricht 0,2 Seite. Gibt es mehr Spitzenstudien (Längenwert ≥ 80),
 # werden auch diese lang gewürdigt; dafür entfallen am unteren Ende die schwächsten Studien.
+# Angelika 2026-11-17 nach dem Vergleich Onkologie unterer GI-Trakt (21 Spitzenstudien, alle lang → nur 27 statt 50
+# Publikationen, drei Themen leer): höchstens doppelt so viele lange Würdigungen wie geplant; weitere Spitzenstudien
+# werden mittel gewürdigt. Fällt wegen der Länge etwas heraus, behält jedes Thema seine beste Arbeit.
 DEFAULT_TIER_COUNTS = {"long": 3, "mid": 8, "short": 20, "news": 19}
 TOP_SCORE = 80   # "sehr hohe Qualität und Bedeutung"
+TOP_LONG_FACTOR = 2  # Spitzenstudien lang höchstens bis zum Doppelten der geplanten Zahl langer Würdigungen
 TOP_15_SCORE = 90  # nicht mehr verwendet: lange Würdigungen haben seit 2026-11-03 höchstens 1 Seite
 COUNT_TOLERANCE_PAGES = 3  # so viel darf die geplante Verteilung überschritten werden (Angelika 2026-10-14)
 COUNT_TIER = {"long": "1 Seite (Lang)", "mid": "½ Seite (Mittel)", "short": "⅓ Seite (Kurz)", "news": "Kurznachricht"}
@@ -411,8 +415,11 @@ def count_tiers(pubs: list[dict], counts: dict) -> tuple[dict[str, str], list[st
     Fragestellung vor Impact Factor). Rückgabe: (Längenstufen, Arbeiten jenseits der Gesamtzahl)."""
     order = sorted(pubs, key=lambda p: p.get("length_score", 0), reverse=True)
     c = {k: max(0, int(counts.get(k) or 0)) for k in ("long", "mid", "short", "news")}
-    n_long = max(c["long"], sum(1 for p in order if p.get("length_score", 0) >= TOP_SCORE))
-    bounds = [("long", n_long), ("mid", c["mid"]), ("short", c["short"]), ("news", c["news"])]
+    n_top = sum(1 for p in order if p.get("length_score", 0) >= TOP_SCORE)
+    n_long = max(c["long"], min(n_top, TOP_LONG_FACTOR * c["long"]))
+    # Zusätzliche lange Würdigungen gehen von den Kurznachrichten ab: die Gesamtzahl bleibt wie geplant
+    news = max(0, c["news"] - (n_long - c["long"]))
+    bounds = [("long", n_long), ("mid", c["mid"]), ("short", c["short"]), ("news", news)]
     tiers, rest, i = {}, [], 0
     for p in order:
         k = None
@@ -443,12 +450,26 @@ def _nominal_pages(counts: dict, n_sections: int) -> float:
     return estimate_pages(fake, n_sections)
 
 
+def _weakest(keep: list[dict]) -> dict:
+    """Die Arbeit, die bei zu großer Länge zuerst herausfällt: die schwächste (keep ist absteigend sortiert),
+    deren Thema danach noch eine andere Arbeit behält. Hat jedes Thema nur noch eine, die schwächste überhaupt.
+    Ohne Themenangabe (Schlüssel "topic") wie bisher die schwächste."""
+    n: dict = {}
+    for p in keep:
+        n[p.get("topic")] = n.get(p.get("topic"), 0) + 1
+    for p in reversed(keep):
+        if p.get("topic") is None or n[p.get("topic")] > 1:
+            return p
+    return keep[-1]
+
+
 def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str, str], list[str]]:
     """pubs: [{"id", "length_score"}]. Mit fester Zahl je Stufe (rules["tier_counts"]) werden die Längen nach
     dem Längenwert vergeben; passt das nicht in die geplante Verteilung bzw. das Seitenlimit, fallen die
     schwächsten Arbeiten heraus ("overflow"), statt alle zu kürzen. Ohne Verteilung (alte Regel): ≥80 →
     1,5 Seiten, ≥65 → 1 Seite, sonst ½ Seite; bei Seitenlimit zuerst stufenweise kürzen, dann overflow.
-    Rückgabe: (Längenstufen, overflow-IDs)."""
+    pubs dürfen ein Thema tragen ("topic"): Dann fällt zuerst die schwächste Arbeit eines Themas heraus, das noch
+    weitere Arbeiten hat, damit kein Thema leer wird. Rückgabe: (Längenstufen, overflow-IDs)."""
     rules = rules or {}
     max_pages = rules.get("max_pages") or 0
     counts = rules.get("tier_counts")
@@ -460,7 +481,9 @@ def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str
         keep = sorted([p for p in pubs if p["id"] in tiers], key=lambda p: p.get("length_score", 0),
                       reverse=True)
         while len(keep) > 1 and estimate_pages(tiers, n_sections) > limit:
-            overflow.append(keep.pop()["id"])
+            victim = _weakest(keep)
+            keep.remove(victim)
+            overflow.append(victim["id"])
             tiers, _ = count_tiers(keep, counts)
         return tiers, overflow
     tiers = {p["id"]: tier_for(p.get("length_score", 0)) for p in pubs}
@@ -476,11 +499,12 @@ def plan_tiers(pubs: list[dict], rules: dict, n_sections: int) -> tuple[dict[str
         else:
             break
     overflow = []
-    for p in order:
-        if estimate_pages(tiers, n_sections) <= max_pages or len(tiers) <= 1:
-            break
-        tiers.pop(p["id"])
-        overflow.append(p["id"])
+    keep = list(reversed(order))  # absteigend
+    while keep and estimate_pages(tiers, n_sections) > max_pages and len(tiers) > 1:
+        victim = _weakest(keep)
+        keep.remove(victim)
+        tiers.pop(victim["id"])
+        overflow.append(victim["id"])
     return tiers, overflow
 
 

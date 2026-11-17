@@ -45,6 +45,7 @@ STEP_NAMES = {
     "toc_merge.merge_group": "Inhaltsverzeichnisse zusammenführen",
     "recommend.analyze_chapter": "Suchplan",
     "recommend.plan_search": "Suchplan",
+    "recommend.plan_parts": "Suchplan",
     "recommend.broaden_search": "Suchplan",
     "recommend.section_queries": "Suchplan",
     "recommend.rank": STEP_RANK,

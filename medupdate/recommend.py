@@ -43,6 +43,47 @@ PLAN_SCHEMA = obj({
     "exclusion": STR,
 })
 
+# Zusammengesetzte Überschriften (Angelika 2026-11-17, Vergleich Onkologie unterer GI-Trakt): Bei „Chirurgie,
+# Strahlentherapie und neoadjuvante Chemotherapie“ deckte die präzise Suche nur Strahlen- und Chemotherapie ab; die
+# randomisierte REAL-Studie (Robotik vs. Laparoskopie, JAMA 2025) fehlte. Je Teil der Überschrift gibt es daher
+# eine eigene präzise Teilsuche („teil: Chirurgie“), aus der zusätzlich bis zu PART_EXTRA Kandidaten kommen.
+PART_PREFIX = "teil: "
+PART_EXTRA = 50       # zusätzliche Kandidaten je Teilsuche (hohe Evidenz zuerst)
+PART_EXTRA_MAX = 150  # höchstens so viele zusätzliche Kandidaten je Thema
+PART_MAX = 4          # mehr Teile: Aufzählung statt zusammengesetzter Überschrift, keine Teilsuchen
+PART_SCHEMA = arr(obj({"teil": STR, "query": STR}))
+PLAN_PARTS_SCHEMA = obj({**PLAN_SCHEMA["properties"], "teilsuchen": PART_SCHEMA})
+PARTS_ONLY_SCHEMA = obj({"teilsuchen": PART_SCHEMA})
+
+
+def heading_parts(title: str) -> list[str]:
+    """Teile einer zusammengesetzten Überschrift („Chirurgie, Strahlentherapie und neoadjuvante Chemotherapie“ →
+    drei Teile). Nur Aufzählungen mit Komma, „und“, „sowie“, „and“, „&“ oder „/“ zwischen Wörtern; zwei bis vier
+    Teile mit je mindestens drei Buchstaben. Sonst eine leere Liste."""
+    t = re.sub(r"^\s*[\d.]+\s*", "", title or "")
+    t = re.sub(r"\([^)]*\)", " ", t).split(":")[-1]  # „Kolorektales Karzinom: Prävention und …“ → nach dem Doppelpunkt
+    if re.search(r"-\s+(?:und|oder|sowie|and|or)\s", t):  # „Primär- und Sekundärprävention“: ein Begriff
+        return []
+    parts = [x.strip(" -–:;") for x in re.split(r",|\s+(?:und|sowie|and)\s+|\s+&\s+|\s+/\s+|(?<=[a-zäöüß])/(?=[A-ZÄÖÜa-zäöü])", t)]
+    parts = [x for x in parts if x]
+    if not 2 <= len(parts) <= PART_MAX or any(len(re.sub(r"[^A-Za-zÄÖÜäöüß]", "", x)) < 3 for x in parts):
+        return []
+    return parts
+
+
+def part_queries(plan: dict | None) -> list[dict]:
+    return [q for q in (plan or {}).get("queries", []) if (q.get("name") or "").startswith(PART_PREFIX)]
+
+
+def _part_list(data: dict, parts: list[str]) -> list[dict]:
+    out = []
+    for x in (data or {}).get("teilsuchen") or []:
+        teil, query = (x.get("teil") or "").strip(), (x.get("query") or "").strip()
+        if teil and query and len(out) < len(parts):
+            out.append({"name": PART_PREFIX + teil[:60], "query": query})
+    return out
+
+
 # Kapitelanalyse: Wie ist das Inhaltsverzeichnis gegliedert, welcher Suchbegriff gehört in jede Suche?
 FRAME_SCHEMA = obj({
     "chapter_en": STR,
@@ -104,15 +145,60 @@ def analyze_chapter(llm: LLM, chapter: str, topics: list[dict]) -> dict:
 
 
 def plan_search(llm: LLM, topic: dict, chapter: str, von: date, bis: date, frame: dict | None = None) -> dict:
+    """Suchplan eines Themas; bei zusammengesetzter Überschrift mit je einer präzisen Teilsuche je Teil."""
     ft = ((frame or {}).get("topics") or {}).get(topic.get("id"), {})
-    return llm.json(
+    parts = heading_parts(topic.get("title", ""))
+    data = llm.json(
         P.search_plan_prompt(topic["title"], topic.get("english_search_focus", ""), chapter,
                              von.strftime("%d.%m.%Y"), bis.strftime("%d.%m.%Y"),
                              path=topic_path(topic), title_en=ft.get("title_en", ""),
                              anchor=(frame or {}).get("anchor_query", ""), aspect=ft.get("aspect_query", ""),
-                             structure=(frame or {}).get("structure", "")),
-        PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000,
+                             structure=(frame or {}).get("structure", ""), parts=parts),
+        PLAN_PARTS_SCHEMA if parts else PLAN_SCHEMA, model=MODEL_MAIN, max_tokens=12000,
     )
+    extra = _part_list(data, parts) if parts else []
+    data.pop("teilsuchen", None)
+    if extra:
+        data["queries"] = list(data.get("queries") or []) + extra
+    return data
+
+
+def plan_parts(llm: LLM, topic: dict, chapter: str, frame: dict | None = None) -> list[dict]:
+    """Nur die Teilsuchen für ein Thema mit schon vorhandenem Suchplan (ältere Projekte, „Suche erweitern“).
+    Ein kurzer Aufruf; gibt die Suchstrategien {"name": "teil: …", "query": …} zurück."""
+    parts = heading_parts(topic.get("title", ""))
+    if not parts:
+        return []
+    precise = next((q.get("query") or "" for q in (topic.get("plan") or {}).get("queries", [])
+                    if q.get("name") == "praezise"), "")
+    data = llm.json(P.part_queries_prompt(topic["title"], topic_path(topic), chapter, parts,
+                                          (frame or {}).get("anchor_query", ""), precise),
+                    PARTS_ONLY_SCHEMA, model=MODEL_MAIN, max_tokens=6000)
+    return _part_list(data, parts)
+
+
+def part_extras(plan: dict, pmids: list[str], von: date, bis: date, email: str) -> tuple[list[str], dict]:
+    """Zusätzliche Kandidaten aus den Teilsuchen: je Teil bis zu PART_EXTRA Treffer, die noch nicht unter den
+    Kandidaten sind (randomisierte Studien, Metaanalysen, Phase-II/III-Studien und Register zuerst), zusammen
+    höchstens PART_EXTRA_MAX. Gibt (Kandidaten inkl. Zusatz, Trefferzahlen der Evidenzsuchen) zurück."""
+    have = set(pmids)
+    lists, stats = [], {}
+    for q in part_queries(plan):
+        try:
+            ev, n_ev = pubmed.search(f"(({q['query']}) AND {EVIDENCE_FIRST}){_suffix(von, bis)}", PART_EXTRA, email)
+            ids, _ = pubmed.search(f"({q['query']}){_suffix(von, bis)}", PART_EXTRA * 2, email)
+        except Exception as ex:  # eine fehlerhafte Teilsuche soll die übrigen Kandidaten nicht blockieren
+            stats[q["name"] + " (hohe Evidenz)"] = f"Fehler: {ex}"
+            continue
+        stats[q["name"] + " (hohe Evidenz)"] = n_ev
+        lists.append([p for p in dict.fromkeys(ev + ids) if p not in have][:PART_EXTRA])
+    extra: list[str] = []
+    for i in range(PART_EXTRA):
+        for ids in lists:
+            if i < len(ids) and ids[i] not in have and len(extra) < PART_EXTRA_MAX:
+                have.add(ids[i])
+                extra.append(ids[i])
+    return pmids + extra, stats
 
 
 def _suffix(von: date, bis: date) -> str:
@@ -185,7 +271,7 @@ def candidate_limit(counts: dict | None) -> int:
     Vergleich pAVK interventionell: auch, wenn schon die präzise Suche mehr als 150 Treffer liefert).
     Angelika 2026-11-14 nach den Vergleichen Psoriasis und Atopie: mehr als 300 Treffer der präzisen Suche
     → bis zu 300 Kandidaten, randomisierte Studien, Metaanalysen und Register zuerst (evidence_first)."""
-    counts = counts or {}
+    counts = {k: v for k, v in (counts or {}).items() if not str(k).startswith(PART_PREFIX)}  # Teilsuchen: eigener Zusatz
     nums = [v for v in counts.values() if isinstance(v, int)]
     precise = counts.get("praezise")
     if isinstance(precise, int) and precise > HUGE_PRECISE_HITS:
@@ -440,6 +526,9 @@ def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, 
     if limit > BROAD_CANDIDATES:
         pmids, evidence_hits = evidence_first(plan, pmids, von, bis, email, limit)
     pmids = pmids[:limit]
+    if part_queries(plan):  # zusammengesetzte Überschrift: zusätzliche Kandidaten je Teilsuche
+        pmids, part_stats = part_extras(plan, pmids, von, bis, email)
+        stats = {**stats, **part_stats}
     attempts = [{"window": [von.isoformat(), bis.isoformat()], "queries": plan.get("queries", []), "hits": stats}]
     if len(pmids) < MIN_CANDIDATES:
         # Zu wenige Treffer: zuerst sensitivere Suchstrategien, dann ein doppelt so langer Zeitraum
