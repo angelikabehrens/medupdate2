@@ -705,6 +705,31 @@ SHEET_MIN_ITEMS = 8      # Auswahlliste: so viele Arbeiten je Thema mindestens z
 SHEET_MIN_RELEVANCE = 40  # Auffüllen der Liste nur mit Arbeiten, die zum Thema passen
 BACKGROUND_MAX = 5       # Hintergrundliteratur je Thema
 BACKGROUND_MIN_RELEVANCE = 70
+GUIDELINE_TOPIC_MAX = 3  # Leitlinien-Themen: so viele Leitlinien/Konsensuspapiere höchstens empfehlen
+# Leitlinien-Themen (Angelika 2026-11-17 nach dem Vergleich Akne/Rosazea): Eine Überschrift wie „Die neue
+# S2k-Leitlinie Therapie der Akne“ handelt von einer Leitlinie. Dort werden Leitlinien und Konsensuspapiere
+# empfohlen statt Primärstudien; Primärstudien dieses Themas stehen nur in der Reserve.
+_GUIDELINE_TOPIC_RE = re.compile(
+    r"leitlinie|guideline|konsensus|consensus|awmf|euroguiderm|\bs[123][ke]?\b|positionspapier|"
+    r"position (paper|statement)", re.I)
+_GUIDELINE_ITEM_RE = re.compile(
+    r"leitlinie|guideline|konsens|consensus|positionspapier|position (paper|statement)|empfehlungen? (einer|der) "
+    r"fachgesellschaft|delphi", re.I)
+_GUIDELINE_PUBTYPES = {"guideline", "practice guideline", "consensus development conference",
+                       "consensus development conference, nih"}
+
+
+def is_guideline_topic(t: dict) -> bool:
+    """Handelt die Überschrift von einer Leitlinie (oder einem Konsensus)? Nur die Überschrift zählt, nicht der
+    Suchschwerpunkt, damit Therapiethemen, deren Suche Leitlinien mit erwähnt, nicht betroffen sind."""
+    return bool(_GUIDELINE_TOPIC_RE.search(t.get("title") or ""))
+
+
+def is_guideline_item(it: dict, rec: dict | None) -> bool:
+    """Ist die Arbeit eine Leitlinie oder ein Konsensuspapier (nach Studiendesign der Bewertung oder
+    Publikationstyp in PubMed)?"""
+    types = {x.strip().lower() for x in (rec or {}).get("pub_types") or []}
+    return bool(types & _GUIDELINE_PUBTYPES) or bool(_GUIDELINE_ITEM_RE.search(it.get("study_design") or ""))
 REROUTE_MAX = 80         # so viele gute Arbeiten höchstens in einem passenderen Thema nachbewerten
 REROUTE_MIN_EVIDENCE = 55
 REROUTE_MAX_RELEVANCE = 70  # gilt für die beste bisherige Relevanz der Arbeit
@@ -899,6 +924,23 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
     inv = invasive_set(proj)  # Schalter „Interventionelle Studien abwerten“: nur noch Reserve
     eligible = [p for p, (_, it) in primary.items() if it.get("relevance", 0) >= recommend.RELEVANCE_MIN
                 and (it.get("priority") == "A" or it.get("score", 0) >= CHAPTER_MIN_SCORE) and p not in inv]
+    # Leitlinien-Themen: dort zählen Leitlinien und Konsensuspapiere aus der Bewertung dieses Themas (auch wenn
+    # sie in einem anderen Thema gleich gut passen); Primärstudien, die am besten hierher passen, nur Reserve.
+    gl_topics = {tid for tid, t in topics if is_guideline_topic(t)}
+    gl_items: dict[str, tuple[str, dict]] = {}
+    for tid, t in topics:
+        if tid not in gl_topics:
+            continue
+        for p, it in (t.get("ranking") or {}).items():
+            if (is_guideline_item(it, proj["records"].get(p)) and it.get("relevance", 0) >= recommend.RELEVANCE_MIN
+                    and (it.get("priority") == "A" or it.get("score", 0) >= CHAPTER_MIN_SCORE)):
+                cur = gl_items.get(p)
+                if cur is None or (it.get("relevance", 0), it.get("score", 0)) > \
+                        (cur[1].get("relevance", 0), cur[1].get("score", 0)):
+                    gl_items[p] = (tid, it)
+    eligible = [p for p in eligible if primary[p][0] not in gl_topics and p not in gl_items]
+    primary = {**primary, **gl_items}
+    eligible += [p for p in gl_items if p not in inv]
     eligible.sort(key=lambda p: (primary[p][1].get("priority") == "A", primary[p][1].get("score", 0),
                                  primary[p][1].get("length_score", 0)), reverse=True)
     rec: dict[str, list[str]] = {tid: [] for tid, _ in topics}
@@ -908,7 +950,8 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
             break
         tid, it = primary[p]
         key = (tid, (it.get("question_key") or p).strip().lower())
-        if len(rec[tid]) >= n_topic or per_key.get(key, 0) >= recommend.MAX_PER_QUESTION:
+        cap = min(n_topic, GUIDELINE_TOPIC_MAX) if tid in gl_topics else n_topic
+        if len(rec[tid]) >= cap or per_key.get(key, 0) >= recommend.MAX_PER_QUESTION:
             continue
         rec[tid].append(p)
         per_key[key] = per_key.get(key, 0) + 1
@@ -921,7 +964,7 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
             continue
         rk = t.get("ranking") or {}
         mine = sorted(rec[tid], key=lambda p: (rk[p].get("length_score", 0), rk[p].get("score", 0)), reverse=True)
-        own = [p for p, (b, _) in primary.items() if b == tid and p not in taken]
+        own = [p for p, (b, _) in primary.items() if b == tid and p not in taken and p not in gl_items]
         own.sort(key=lambda p: (p not in inv, rk[p].get("priority") in ("A", "B"), rk[p].get("score", 0)),
                  reverse=True)
         reserve = [p for p in own if rk[p].get("priority") in ("A", "B")
@@ -938,7 +981,7 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
             changed += 1
         t["recommended"], t["reserve"] = mine, reserve
         bg = [p for p, (b, it) in best.items() if b == tid and not it.get("is_primary_research", True)
-              and it.get("relevance", 0) >= BACKGROUND_MIN_RELEVANCE]
+              and it.get("relevance", 0) >= BACKGROUND_MIN_RELEVANCE and p not in taken]
         bg.sort(key=lambda p: (rk[p].get("relevance", 0), rk[p].get("score", 0)), reverse=True)
         t["background"] = bg[:BACKGROUND_MAX]
     if changed:
@@ -947,7 +990,9 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
     n_a = sum(1 for p in taken if primary[p][1].get("priority") == "A")
     log(f"Kapitelweite Auswahl: {n_rec} von {target} Empfehlungen ({n_a} mit Priorität A, die übrigen nach "
         f"Score), Reserve und Hintergrundliteratur je Thema aktualisiert."
-        + (f" {len(inv)} interventionelle Arbeit(en) stehen nur in der Reserve." if inv else ""))
+        + (f" {len(inv)} interventionelle Arbeit(en) stehen nur in der Reserve." if inv else "")
+        + (f" Leitlinien-Thema: {', '.join(t.get('number') or t.get('title', '') for tid, t in topics if tid in gl_topics)}"
+           " (dort Leitlinien statt Primärstudien)." if gl_topics else ""))
 
 
 INVASIVE_SCHEMA = obj({"items": arr(obj({"key": STR, "invasive": BOOL}))})

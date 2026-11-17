@@ -1371,6 +1371,47 @@ def test_final_toc_rules():
     assert "5.1.2\tBarrett" in toc and "5.1.3\tThema flach" in toc and not any(t.startswith("5.1.2.1") for t in toc)
     assert any("Thema tief" in t for t in texts)  # im Text weiterhin vorhanden
 
+def test_guideline_topic():
+    """Angelika 2026-11-17 (Vergleich Akne/Rosazea): Überschriften, die eine Leitlinie nennen, bekommen Leitlinien
+    und Konsensuspapiere als Hauptpublikation; Primärstudien dieses Themas nur in der Reserve."""
+    def it(rel, sc_ev, primary=True, design="RCT", key=""):
+        return {"relevance": rel, "evidence": sc_ev, "practice_impact": 80, "novelty": 70, "risk_of_bias": "Low",
+                "question_importance": 80, "journal_impact_factor": 6, "is_primary_research": primary,
+                "question_key": key, "study_design": design, "rationale": "r"}
+    assert pipeline.is_guideline_topic({"title": "Die neue S2k-Leitlinie Therapie der Akne"})
+    assert pipeline.is_guideline_topic({"title": "EuroGuiDerm-Update"})
+    assert not pipeline.is_guideline_topic({"title": "Topische Therapie", "english_search_focus": "guideline"})
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "Akne"}
+    proj["manual_limits"] = {"publications": 10}
+    pipeline.apply_manual_limits(proj)
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "Systemische Therapie", "ranking": {
+            "G": it(95, 80, primary=False, design="Evidenzbasierte Leitlinie"), "S1": it(90, 85, key="s1")}},
+        "T2": {"id": "T2", "title": "Die neue S2k-Leitlinie Therapie der Akne", "ranking": {
+            "G": it(95, 80, primary=False, design="Evidenzbasierte Leitlinie"),
+            "N": it(70, 70, primary=False, design="Narratives Review"),
+            "P": it(60, 80, primary=False, design="Übersicht", key="p"),
+            "S2": it(80, 85, key="s2")}},
+    }
+    proj["records"] = {p: {"pmid": p, "title": f"Titel {p}", "authors": ["Muster A"], "abstract": "x",
+                           "journal": "J", "year": "2026", "pub_types": ["Practice Guideline"] if p == "P" else []}
+                       for p in ("G", "N", "P", "S1", "S2")}
+    pipeline.select_chapter(proj)
+    t1, t2 = proj["topics"]["T1"], proj["topics"]["T2"]
+    assert set(t2["recommended"]) == {"G", "P"}, t2["recommended"]  # Leitlinien statt Primärstudie
+    assert "S2" in t2["reserve"] and "S2" not in t1["recommended"]  # Primärstudie nur Reserve
+    assert "G" not in t1["recommended"] + t1["background"] and "S1" in t1["recommended"]
+    assert "N" not in t2["recommended"]  # narrative Übersicht bleibt Hintergrund
+    assert "N" in t2["background"] and "G" not in t2["background"]
+    # ohne Leitlinien-Überschrift bleibt alles wie bisher
+    proj["topics"]["T2"]["title"] = "Neue Studien"
+    for t in proj["topics"].values():
+        t.pop("selected", None)
+    pipeline.select_chapter(proj)
+    assert "G" not in proj["topics"]["T2"]["recommended"] and "S2" in proj["topics"]["T2"]["recommended"]
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_final_toc_rules()
@@ -1393,6 +1434,7 @@ if __name__ == "__main__":
     test_guideline_needs()
     test_toc_merge()
     test_chapter_selection()
+    test_guideline_topic()
     test_huge_topics_evidence_first()
     test_safety_net_per_section()
     test_oe_list()
