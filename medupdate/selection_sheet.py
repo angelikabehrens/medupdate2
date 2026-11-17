@@ -72,13 +72,18 @@ def sheet_data(proj: dict) -> dict:
     for t in proj["topics"].values():
         for p, it in (t.get("ranking") or {}).items():
             rankings.setdefault(p, it)
+    # Arbeiten aus einer OpenEvidence-Liste stehen immer in der Liste (in ihrem bestpassenden Thema), auch wenn die
+    # App sie weder empfiehlt noch in die Reserve setzt – wie in Schritt 1 der App
+    oe = pipeline.oe_pmids(proj)
+    oe_best = {p: b for p, (b, _) in pipeline._best_topics(proj).items() if p in oe} if oe else {}
     topics, seen = [], set()
     for tid, t in proj["topics"].items():
         if not t.get("enabled", True):
             continue
         rk = t.get("ranking") or {}
         chosen = [p for p, x in pipeline._pub_list(proj) if x == tid]
-        others = [p for p in dict.fromkeys(list(t.get("recommended", [])) + list(t.get("reserve", [])))
+        others = [p for p in dict.fromkeys(list(t.get("recommended", [])) + list(t.get("reserve", []))
+                                           + [p for p in rk if oe_best.get(p) == tid])
                   if p not in chosen and p not in cur]  # woanders ausgewählte Arbeiten stehen dort
         items = []
         for p in chosen + others:
@@ -89,7 +94,8 @@ def sheet_data(proj: dict) -> dict:
             it = rk.get(p) or rankings.get(p) or {}
             status = ("hochgeladen" if d.get("extra") else
                       "Empfehlung" if p in t.get("recommended", []) else
-                      "Reserve" if p in t.get("reserve", []) else "verschoben")
+                      "Reserve" if p in t.get("reserve", []) else
+                      "OpenEvidence" if oe_best.get(p) == tid else "verschoben")
             items.append({
                 "id": p, "checked": p in chosen, "title": rec.get("title", p), "authors": _authors(rec),
                 "first_author": surname((rec.get("authors") or [""])[0]),

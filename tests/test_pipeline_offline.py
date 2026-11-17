@@ -1197,6 +1197,13 @@ def test_oe_list():
         assert set(proj["oe_list"]["items"]) == {"502"}
         assert "501" not in t1["ranking"] and "502" in t1["ranking"] and not t1["ranking"]["100"].get("oe")
         assert pipeline.SAFETY not in proj["topics"], "ohne Arbeiten ohne Thema entfällt „Neue Themen“"
+        # Auswahlliste der Autoren: Arbeiten der Liste stehen dort auch ohne Empfehlung und ohne Reserve
+        from medupdate import selection_sheet
+        for k in ("recommended", "reserve"):
+            t1[k] = [p for p in t1.get(k, []) if p != "502"]
+        t1.pop("selected", None)
+        items = {i["id"]: i for tp in selection_sheet.sheet_data(proj)["topics"] for i in tp["items"]}
+        assert items["502"]["status"] == "OpenEvidence" and not items["502"]["checked"]
     finally:
         pubmed.search, pubmed.fetch_records, pubmed.find_pmid = orig
 
