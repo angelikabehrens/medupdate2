@@ -2537,7 +2537,7 @@ def run_manuscript(llm: LLM, proj: dict, log, options: dict) -> None:
         key = "DE" if lang == "Deutsch" else "EN"
         try:
             befunde, final = run_formal_check(raw, llm if lang == "Deutsch" else None, template, rules, formatter,
-                                              bold_refs=key_refs, cache=build_cache)
+                                              bold_refs=key_refs, cache=build_cache, lang=lang)
         except Exception as ex:
             _err(proj, f"Formale Prüfung {key}", ex)
             befunde, final = [], raw

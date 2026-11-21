@@ -274,6 +274,10 @@ def test_full_pipeline(monkeypatch=None):
     texts = [p.text for p in doc.paragraphs]
     assert texts.index("8.1\tAbschnitt") < texts.index("Interessenkonflikte"), "Inhaltsverzeichnis auf der ersten Seite"
     assert "Inhalt" not in texts and "Inhaltsverzeichnis" not in texts, "ohne Überschrift „Inhalt“"
+    ik = texts.index("Interessenkonflikte")
+    note = texts.index(docx_tools.AI_NOTICE["Deutsch"])
+    assert ik < note < texts.index("8.1\tAbschnitt", ik), "KI-Hinweis unter den Interessenkonflikten auf Seite 1"
+    assert texts.count(docx_tools.AI_NOTICE["Deutsch"]) == 1
     n_img = sum(1 for p in doc.paragraphs if p.text.startswith("Abb."))
     assert n_img == 0, "keine automatischen Abbildungen mehr"
     print("BEFUNDE")
@@ -1412,6 +1416,23 @@ def test_guideline_topic():
     assert "G" not in proj["topics"]["T2"]["recommended"] and "S2" in proj["topics"]["T2"]["recommended"]
 
 
+def test_ai_notice_without_template():
+    from medupdate import formal
+    blocks = [{"number": "8.1", "topic": "Thema", "level": 1, "pubs": []}]
+    raw = manuscript.build_docx("Kapitel", blocks, "Deutsch")
+    for lang in ("Deutsch", "Englisch"):
+        _, final = formal.run_formal_check(raw, None, None, lang=lang)
+        doc = Document(io.BytesIO(final))
+        texts = [p.text for p in doc.paragraphs]
+        note = docx_tools.AI_NOTICE[lang]
+        ik = texts.index("Interessenskonflikte")
+        assert texts.count(note) == 1 and ik < texts.index(note), "KI-Hinweis unter den Interessenkonflikten"
+        brk = next(i for i, p in enumerate(doc.paragraphs) if docx_tools._breaks_page(p))
+        assert texts.index(note) < brk, "KI-Hinweis auf Seite 1"
+        assert all(not t for t in texts[ik + 1:texts.index(note)]), "Platz zum Ausfüllen bleibt frei"
+        assert note.count(".") == 1
+
+
 if __name__ == "__main__":
     test_fazit_and_headings()
     test_final_toc_rules()
@@ -1442,6 +1463,7 @@ if __name__ == "__main__":
     test_search_plan_and_safety_net()
     test_sota_trailing_note()
     test_full_pipeline()
+    test_ai_notice_without_template()
     test_comment_box()
     test_compact_note()
     print("OK")

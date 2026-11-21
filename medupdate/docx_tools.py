@@ -240,8 +240,60 @@ def _source_toc_entries(source_doc: Document) -> list[tuple[str, str]]:
     return out
 
 
+# KI-Hinweis auf Seite 1, direkt unter den Interessenkonflikten (Wunsch der Autorin, 2026-11-21)
+AI_NOTICE = {
+    "Deutsch": "Dieser Beitrag basiert auf einer KI-generierten Erstfassung, die von dem Autor inhaltlich "
+               "geprüft und überarbeitet wurde.",
+    "Englisch": "This article is based on an AI-generated first draft that was reviewed and revised "
+                "by the author.",
+}
+_IK_TITLES = ("interessenkonflikte", "interessenskonflikte", "conflicts of interest", "conflict of interest")
+
+
+def _breaks_page(p) -> bool:
+    el = p._element
+    if any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br"))):
+        return True
+    ppr = el.find(qn("w:pPr"))
+    return ppr is not None and (ppr.find(qn("w:sectPr")) is not None
+                                or ppr.find(qn("w:pageBreakBefore")) is not None)
+
+
+def add_ai_notice(doc: Document, lang: str = "Deutsch") -> bool:
+    """Setzt den KI-Hinweis unter den Block „Interessenkonflikte“ auf Seite 1: nach dem
+    vorhandenen Text bzw. den Leerzeilen zum Ausfüllen, vor dem Seitenumbruch. Ohne
+    Interessenkonflikte-Überschrift bleibt das Dokument unverändert (Rückgabe False)."""
+    text = AI_NOTICE.get(lang, AI_NOTICE["Deutsch"])
+    paras = [p for p in doc.paragraphs if p._element.getparent() is not None]
+    if any(p.text.strip() == text for p in paras):
+        return True
+    ik = next((i for i, p in enumerate(paras) if p.text.strip().rstrip(":").lower() in _IK_TITLES), None)
+    if ik is None:
+        return False
+    # Ende des Interessenkonflikte-Blocks: Absatz mit Seitenumbruch, nächste Überschrift/Formatvorlage
+    # mit Gliederungsfunktion oder Dokumentende
+    end = len(paras)
+    for j in range(ik + 1, len(paras)):
+        p = paras[j]
+        name = (p.style.name or "").lower() if p.style is not None else ""
+        if _breaks_page(p) or name.startswith(("heading", "toc", "standardtitle", "maintitle")):
+            end = j
+            break
+    blank = doc.add_paragraph("")
+    note = doc.add_paragraph(text)
+    if end < len(paras) and not paras[end].text.strip() and _breaks_page(paras[end]):
+        paras[end]._element.addprevious(blank._element)
+        paras[end]._element.addprevious(note._element)
+    else:
+        last = paras[end - 1]._element
+        last.addnext(note._element)
+        last.addnext(blank._element)
+    return True
+
+
 def copy_document_content_into_template(
-    source_doc: Document, template_bytes: bytes, search_terms: list[str] | None = None
+    source_doc: Document, template_bytes: bytes, search_terms: list[str] | None = None,
+    ai_lang: str = "Deutsch",
 ) -> bytes:
     """Kopiert den Publikationsinhalt (Text mit Formatierung, schwebende Bilder) aus
     dem fertigen, korrigierten Manuskript in eine vom Nutzer bereitgestellte eigene
@@ -352,6 +404,9 @@ def copy_document_content_into_template(
         ik_element = template_paragraphs[ik_idx]._element
         for _ in range(2):
             ik_element.addprevious(template_doc.add_paragraph("")._element)
+
+    # 4b) KI-Hinweis direkt unter den Interessenkonflikten der Vorlage
+    add_ai_notice(template_doc, ai_lang)
 
     # 5) Publikationsinhalt aus dem Quelldokument anhängen. Vor der ersten "Heading 2"
     # steht nur unsere eigene Standard-Titelseite (Titel, Datum, Suchbegriffe,

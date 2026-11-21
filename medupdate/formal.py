@@ -12,7 +12,7 @@ from docx import Document
 
 from .citations import _CITE_RE, consolidate_literature_globally, dedupe_global_references, merge_repeated_citations
 from .config import MODEL_FAST
-from .docx_tools import KURZ_MARK, copy_document_content_into_template
+from .docx_tools import AI_NOTICE, KURZ_MARK, add_ai_notice, copy_document_content_into_template
 
 
 def collapse_kurznachrichten(doc: Document) -> int:
@@ -347,7 +347,7 @@ def fix_spelling_and_grammar(doc: Document, llm, cache: dict | None = None) -> i
 
 def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None, rules: dict | None = None,
                      format_references=None, bold_refs: list[str] | None = None,
-                     cache: dict | None = None) -> tuple[list[dict], bytes]:
+                     cache: dict | None = None, lang: str = "Deutsch") -> tuple[list[dict], bytes]:
     """Führt die formale Prüfung des hochgeladenen (vom Nutzer überarbeiteten)
     Gesamtmanuskripts durch. Führt dabei zunächst alle publikationslokalen
     Literaturlisten zu einer gemeinsamen, fortlaufend nummerierten Liste am
@@ -406,8 +406,11 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
                     elif term_text:
                         break
                 break
-        corrected_bytes = copy_document_content_into_template(doc, template_bytes, search_terms)
+        corrected_bytes = copy_document_content_into_template(doc, template_bytes, search_terms, ai_lang=lang)
     else:
+        # KI-Hinweis unter den Interessenkonflikten – erst nach der Rechtschreibprüfung, damit der
+        # vorgegebene Wortlaut unverändert bleibt
+        add_ai_notice(doc, lang)
         # Die Überschrift über dem Inhaltsverzeichnis (nur Marke für die Weiterverarbeitung) entfällt
         for p in list(doc.paragraphs)[:60]:
             if p.text.strip() in ("Inhaltsverzeichnis", "Contents", "Inhalt"):
@@ -534,7 +537,7 @@ def run_formal_check(docx_bytes: bytes, llm, template_bytes: bytes | None = None
     ik_filled = False
     if ik_idx is not None:
         for i in range(ik_idx + 1, min(ik_idx + 6, len(paragraphs))):
-            if paragraphs[i].text.strip():
+            if paragraphs[i].text.strip() and paragraphs[i].text.strip() not in AI_NOTICE.values():
                 ik_filled = True
                 break
     befunde.append({
