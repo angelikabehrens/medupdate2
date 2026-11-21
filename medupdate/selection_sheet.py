@@ -217,10 +217,8 @@ header button.primary{background:var(--ochre);color:#fff;font-weight:600}
 main{max-width:1050px;margin:0 auto;padding:16px}
 .intro{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:16px}
 .intro ol{margin:6px 0 0 18px;padding:0}
-.intro label.editor{display:block;margin:0 0 10px}
 .filebtn{display:inline-block;font-size:13px;border-radius:6px;padding:4px 10px;background:var(--mist);border:1px solid var(--line);cursor:pointer}
 .filebtn{position:relative}.filebtn input{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden}
-.intro input[type=text]{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:4px;width:260px;max-width:100%}
 h2.section{font:600 19px Cambria,Georgia,serif;margin:26px 0 8px;color:var(--green)}
 .topic{background:var(--card);border:1px solid var(--line);border-radius:8px;margin:10px 0 14px;overflow:hidden}
 .topic-head{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;padding:10px 14px;background:var(--mist)}
@@ -286,7 +284,6 @@ main{padding:10px}.pub{grid-template-columns:20px 22px 1fr;padding:8px}.row{grid
 </header>
 <main>
   <div class="intro">
-    <label class="editor">Bearbeitet von: <input type="text" id="editor" placeholder="Name"></label>
     <strong>So geht es:</strong>
     <ol>
       <li>Die Literaturliste ist nach Unterthemen gegliedert. Gehen Sie die Publikationen in den einzelnen Unterkapiteln durch. Zu jeder Arbeit finden Sie einen direkten Link zu PubMed („PubMed“) oder zur Zeitschrift („DOI“), jeweils anklicken. Unter der Publikation finden Sie die Qualitätsbeurteilung durch die KI. Die gelbe Markierung „Empfehlung“ weist darauf hin, dass es sich um eine relevante Publikation handelt (in der Regel multizentrische RCTs). Setzen Sie ein Häkchen bei jeder Publikation, die im Handbuch gewürdigt werden soll. Das Häkchen kennzeichnet Ihre Auswahl. Die Anzeige oberhalb der Liste zählt die ausgewählten Publikationen mit und zeigt die von med update vorgesehene Höchstzahl. Bitte wählen Sie nicht mehr Publikationen aus, als dort vorgesehen sind. Sie können Ihre Auswahl jederzeit ändern.</li>
@@ -600,7 +597,7 @@ function save(){
   for (const tid of state.order) for (const id of state.topics[tid].items){ const p = state.pubs[id]; if (p.checked && p.file && p.check === "nein") missing.push(p.title); }
   if (missing.length && !confirm(missing.length + " hochgeladene Datei(en) scheinen nicht zur Publikation zu passen und werden nicht mitgespeichert:\n\n" + missing.slice(0, 5).join("\n") + "\n\nTrotzdem speichern?")) return;
   const entries = [], meta = {format: DATA.format, version: DATA.version, project_id: DATA.project_id, chapter: DATA.chapter,
-    created: DATA.created, saved_at: new Date().toISOString(), edited_by: $("#editor").value.trim(), target: DATA.target, topics: [], guidelines: []};
+    created: DATA.created, saved_at: new Date().toISOString(), target: DATA.target, topics: [], guidelines: []};
   let k = 0;
   for (const tid of state.order){
     const items = [];
@@ -655,7 +652,6 @@ async function openPackage(file){
   for (const tid of state.order) for (const id of state.topics[tid].items) if (!placed.has(id) && state.pubs[id] && state.pubs[id].kind === "pub") newItems[tid].push(id);
   for (const tid of state.order) state.topics[tid].items = newItems[tid];
   state.guidelines = (meta.guidelines || []).filter(g => files[g.file]).map(g => ({file: {name: g.file_name, buf: files[g.file]}, topic: g.topic_id || "", pdf: true}));
-  if (meta.edited_by) $("#editor").value = meta.edited_by;
   state.dirty = false; render(); toast("Arbeitsliste geöffnet.");
 }
 
