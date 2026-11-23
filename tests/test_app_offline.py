@@ -205,8 +205,9 @@ def test_app_step1_savings():
         at.run()
         _ok(at)
         ext = at.button(key="extend_search")
-        assert "ca. 1–2 USD, Sparmodus" in ext.label and not ext.disabled, ext.label
-        assert any("bis zu 200 zusätzliche Kandidaten, hohe Evidenz zuerst" in c.value for c in at.caption)
+        assert "ca. 2–2 USD, Sparmodus" in ext.label and not ext.disabled, ext.label
+        assert any("bis zu 250 zusätzliche Kandidaten (führende Journale und hohe Evidenz zuerst" in c.value
+                   for c in at.caption)
         t0.update(saved)
         at.run()
 

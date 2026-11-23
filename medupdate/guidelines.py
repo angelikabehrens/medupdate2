@@ -29,11 +29,23 @@ GUIDELINE_SCHEMA = obj({
 
 
 SEARCH_BATCH_USD = 0.15  # geschätzte Kosten einer Leitliniensuche im Sammelauftrag (8 Websuchen, schnelles Modell)
+NEW_SEARCH_BATCH_USD = 0.25  # Leitlinien-Themen: zusätzlich gezielt neue Leitlinien im Suchzeitraum (12 Websuchen)
+NEW_GL_VERSION = 1  # Leitlinien-Themen mit älterer Suche werden bei „Suche erweitern“ neu recherchiert
 
 
-def search_job(topic: str, chapter: str, key: str = "g") -> Job:
-    """Die Leitliniensuche (Websuche) als Auftrag: läuft sofort (search_guidelines) oder im Sammelauftrag."""
-    return Job(key=key, prompt=P.guideline_search_prompt(topic, chapter, date.today().strftime("%d.%m.%Y")),
+def search_job(topic: str, chapter: str, key: str = "g", window: tuple[date, date] | None = None) -> Job:
+    """Die Leitliniensuche (Websuche) als Auftrag: läuft sofort (search_guidelines) oder im Sammelauftrag.
+    window: nur bei Leitlinien-Themen („Neue Leitlinien …“) – dann zusätzlich gezielt nach Leitlinien suchen,
+    die im Suchzeitraum neu erschienen oder aktualisiert sind (Angelika 2026-11-23, Internisten-Update
+    Angiologie: zwei neue S3-Leitlinien fehlten). Das AWMF-Register blockt automatische Abrufe, daher Websuche."""
+    today = date.today().strftime("%d.%m.%Y")
+    if window:
+        von, bis = window
+        return Job(key=key, prompt=P.guideline_search_prompt(topic, chapter, today, von.strftime("%m/%Y"),
+                                                             bis.strftime("%m/%Y")),
+                   step=STEP_GUIDELINES, model=MODEL_FAST, max_tokens=16000, effort="medium", web_search=12,
+                   est_usd=NEW_SEARCH_BATCH_USD)
+    return Job(key=key, prompt=P.guideline_search_prompt(topic, chapter, today),
                step=STEP_GUIDELINES, model=MODEL_FAST, max_tokens=12000, effort="medium", web_search=8,
                est_usd=SEARCH_BATCH_USD)
 
@@ -44,8 +56,8 @@ def finish_search(llm: LLM, research: str) -> list[dict]:
     return data.get("guidelines", [])
 
 
-def search_guidelines(llm: LLM, topic: str, chapter: str) -> list[dict]:
-    return finish_search(llm, run_job(llm, search_job(topic, chapter)))
+def search_guidelines(llm: LLM, topic: str, chapter: str, window: tuple[date, date] | None = None) -> list[dict]:
+    return finish_search(llm, run_job(llm, search_job(topic, chapter, window=window)))
 
 
 _PDF_LINK_RE = re.compile(r'href=["\']([^"\']+\.pdf[^"\']*)["\']', re.IGNORECASE)

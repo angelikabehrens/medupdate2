@@ -476,15 +476,18 @@ if proj.get("toc"):
                     pipeline.fit_to_length(proj, log)
                 run_with_status("Auswahl wird angepasst", _refocus, _flm)
         _ext = pipeline.extension_pending(proj)
-        if _ext["widen"] or _ext["followup"] or _ext.get("net") or _ext.get("parts"):
+        if _ext["widen"] or _ext["followup"] or _ext.get("net") or _ext.get("parts") or _ext.get("gl"):
             _parts = []
             _extra = 0
             if _ext["widen"]:
                 _wt = [proj["topics"][tid] for tid in _ext["widen"]]
                 _extra = sum(max(recommend.candidate_limit(t.get("query_hits")) - t.get("cand_limit", 60), 0)
+                             + (recommend.LEAD_FIRST_MAX.get(recommend.candidate_limit(t.get("query_hits")), 0) // 2
+                                if recommend.lead_topic(t.get("query_hits"))
+                                and (t.get("lead_first") or 0) < recommend.LEAD_FIRST_VERSION else 0)
                              for t in _wt)
-                _parts.append(f"{len(_wt)} Themen mit vielen Treffern: bis zu {_extra} zusätzliche Kandidaten, "
-                              "hohe Evidenz zuerst")
+                _parts.append(f"{len(_wt)} Themen: bis zu {_extra} zusätzliche Kandidaten (führende Journale und "
+                              "hohe Evidenz zuerst, kleine Themen vollständig)")
             if _ext.get("parts"):
                 _pt = [proj["topics"][tid] for tid in _ext["parts"]]
                 _pn = sum(min(len(recommend.heading_parts(t["title"])) * recommend.PART_EXTRA,
@@ -498,8 +501,11 @@ if proj.get("toc"):
                 _parts.append("Suche nach wichtigen Arbeiten außerhalb der Stichworte" +
                               (f" je Hauptüberschrift ({_ext['net']})" if _ext["net"] > 1 else " im ganzen Kapitel"))
                 _extra += _ext["net"] * pipeline.SAFETY_MAX_CANDIDATES * 0.8
+            if _ext.get("gl"):
+                _parts.append(f"neue Leitlinien im Suchzeitraum für {len(_ext['gl'])} Leitlinien-Thema/-Themen")
             _bx = bool(proj.get("batch_step1"))
-            _usd = (_extra * RANK_USD * (0.5 if _bx else 1.0) + (0.5 if _ext["followup"] else 0))
+            _usd = (_extra * RANK_USD * (0.5 if _bx else 1.0) + (0.5 if _ext["followup"] else 0)
+                    + 0.4 * len(_ext.get("gl") or []))
             _ec1, _ec2 = st.columns([3, 1])
             _ec1.caption("🔁 Erweiterte Suche verfügbar: " + "; ".join(_parts) + ". Bereits bewertete Arbeiten "
                          "werden nicht erneut bewertet.")
@@ -509,9 +515,12 @@ if proj.get("toc"):
                            + (", Sparmodus)" if _bx else ")"), key="extend_search", disabled=_running):
                 _elm = get_llm()
                 if _elm:
-                    run_with_status("Suche wird erweitert",
-                                    lambda log, _b=_bx: pipeline.run_recommendations(_elm, proj, log, batch=_b),
-                                    _elm)
+                    def _extend(log, _b=_bx):
+                        pipeline.run_recommendations(_elm, proj, log, batch=_b)
+                        if _ext.get("gl"):
+                            pipeline.run_guideline_search(_elm, proj, log)
+                            pipeline.run_guideline_needs(_elm, proj, log)
+                    run_with_status("Suche wird erweitert", _extend, _elm)
     if proj.get("template"):
         st.caption(f"Formatvorlage: {proj['template']['name']} · erkannte med-update-Formatvorlagen: "
                    f"{', '.join(proj['template'].get('med_update_styles', [])) or 'keine'}")

@@ -245,7 +245,15 @@ Publikationen:
 {candidates_block}"""
 
 
-def guideline_search_prompt(topic: str, chapter: str, today: str) -> str:
+def guideline_search_prompt(topic: str, chapter: str, today: str, von: str = "", bis: str = "") -> str:
+    new = (f"""
+
+Dieses Thema stellt NEUE Leitlinien vor. Suche deshalb zusätzlich gezielt nach Leitlinien, die von {von} bis \
+{bis} neu erschienen oder grundlegend aktualisiert wurden, auch fachübergreifend mit Bezug zum Kapitel (z.B. \
+neue S3-Leitlinien anderer Fachgesellschaften, die das Fach betreffen). Nutze dafür u.a. die Übersicht neuer \
+und aktualisierter Leitlinien im AWMF-Register (register.awmf.org), Mitteilungen der Fachgesellschaften und \
+Fachpresse. Prüfe jeweils das Erscheinungsdatum der aktuellen Fassung. Nenne Leitlinien aus diesem Zeitraum \
+zuerst, ältere nur, wenn sie für das Thema unverzichtbar sind; dann höchstens 8 statt 6.""" if von and bis else "")
     return f"""Recherchiere mit der Websuche die AKTUELL GÜLTIGEN Leitlinien zum folgenden Thema eines \
 deutschsprachigen ärztlichen Fortbildungshandbuchs (Stand heute: {today}).
 
@@ -262,7 +270,7 @@ Prüfe bei jeder Leitlinie, ob sie die aktuelle Fassung ist (nicht abgelaufen, k
 Gültigkeitsdatum) und ob sie frei zugänglich ist. Suche nach Möglichkeit den direkten Link zur \
 Volltext-PDF (z.B. register.awmf.org/.../XXX_S3_..._2024-05.pdf oder die Verlagsseite mit Open Access).
 
-Gib am Ende eine Liste der höchstens 6 wichtigsten Leitlinien aus, jeweils mit: Titel, herausgebende \
+{new.strip() + chr(10) + chr(10) if new else ""}Gib am Ende eine Liste der höchstens 6 wichtigsten Leitlinien aus, jeweils mit: Titel, herausgebende \
 Fachgesellschaft(en), Jahr der aktuellen Fassung, Registernummer (falls AWMF), Link zur Übersichtsseite, \
 Link zur Volltext-PDF (falls gefunden), frei zugänglich ja/nein, und warum sie für das Thema relevant ist. \
 Erfinde keine Leitlinien, Links oder Jahreszahlen – nenne nur, was du in der Recherche tatsächlich gefunden hast."""

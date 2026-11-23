@@ -316,8 +316,7 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
     def widen(t):  # Thema mit bisher weniger Kandidaten als heute vorgesehen: nur die zusätzlichen bewerten
         if t.get("parts_new"):  # neue Teilsuchen (zusammengesetzte Überschrift)
             return True
-        return (t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
-                and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15)
+        return needs_more_candidates(t)
 
     todo = [(tid, t) for tid, t in _search_topics(proj) if t.get("searchable") is not False
             and (fresh(t) or widen(t))]
@@ -489,7 +488,7 @@ def _rank_in_batch(llm, proj: dict, log, todo: list, known_of, store, chapter: s
     n_rank = len(jobs)
     for tid, t in _guideline_todo(proj):
         if not t.get("guidelines_raw"):
-            job = G.search_job(t["title"], chapter, key=f"g|{tid}")
+            job = G.search_job(t["title"], chapter, key=f"g|{tid}", window=_gl_window(proj, t))
             jobs.append(job)
             owner[job.key] = (tid, None)
     if not jobs:
@@ -580,7 +579,8 @@ def apply_prior(proj: dict, log=lambda m: None, reselect: bool = True) -> int:
     return len(total)
 
 
-SAFETY_VERSION = 2       # 2: eigene Suche je Hauptüberschrift (Angelika 2026-11-15)
+SAFETY_VERSION = 3       # 2: eigene Suche je Hauptüberschrift (Angelika 2026-11-15); 3: führende internistische
+                         # Fachjournale in der Journal-Suche (Angelika 2026-11-23)
 SAFETY_MAX_SECTIONS = 12  # mehr Hauptabschnitte: eine Suche für das ganze Kapitel
 
 
@@ -1201,17 +1201,34 @@ def run_followup(llm: LLM, proj: dict, log) -> None:
     log(f"{n} Folgepublikationen bewertet.")
 
 
+def needs_more_candidates(t: dict) -> bool:
+    """Thema mit bisher weniger Kandidaten als heute vorgesehen (dann werden nur die zusätzlichen bewertet):
+    mehr Kandidaten nach heutiger Regel (auch: kleine Themen vollständig, 2026-11-23) oder großes Thema ohne
+    die Vorrangsuche nach führenden Journalen (2026-11-23)."""
+    if t.get("searchable") is False or "recommended" not in t:
+        return False
+    hits = t.get("query_hits")
+    if not isinstance(hits, dict) or not hits:
+        return False
+    limit = recommend.candidate_limit(hits)
+    cur = t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC)
+    if cur < limit and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15:
+        return True
+    return recommend.lead_topic(hits) and (t.get("lead_first") or 0) < recommend.LEAD_FIRST_VERSION
+
+
 def extension_pending(proj: dict) -> dict:
     """Was ein erneutes „Literatur bewerten“ in einem schon bewerteten Projekt nachholen würde."""
     widen = [tid for tid, t in _search_topics(proj) if "recommended" in t and t.get("searchable") is not False
-             and t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
-             and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15]
+             and needs_more_candidates(t)]
     ranked = any(t.get("ranking") for _, t in _search_topics(proj))
     net = 0
     if ranked and proj.get("search_frame") and (proj.get("safety_net") or {}).get("version") != SAFETY_VERSION:
         net = len(safety_sections(proj)) or 1  # Suche je Hauptüberschrift (2026-11-15) noch nicht gelaufen
     parts = [tid for tid, t in _search_topics(proj) if "recommended" in t and parts_pending(t)]
-    return {"widen": widen, "followup": followup_pending(proj) if ranked else 0, "net": net, "parts": parts}
+    gl = [tid for tid, t in _guideline_todo(proj) if "guidelines" in t]  # Leitlinien-Themen: neue Leitlinien
+    return {"widen": widen, "followup": followup_pending(proj) if ranked else 0, "net": net, "parts": parts,
+            "gl": gl}
 
 
 def run_reroute(llm: LLM, proj: dict, log) -> None:
@@ -1316,8 +1333,17 @@ def fit_to_length(proj: dict, log=lambda m: None) -> None:
 
 
 def _guideline_todo(proj: dict) -> list[tuple[str, dict]]:
-    return [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and "guidelines" not in t
-            and not t.get("safety")]
+    """Themen ohne Leitlinienrecherche; dazu Leitlinien-Themen, deren Recherche noch nicht gezielt nach neuen
+    Leitlinien im Suchzeitraum gesucht hat (2026-11-23)."""
+    return [(tid, t) for tid, t in proj["topics"].items() if t.get("enabled", True) and not t.get("safety")
+            and ("guidelines" not in t or (is_guideline_topic(t) and t.get("gl_new", 0) < G.NEW_GL_VERSION))]
+
+
+def _gl_window(proj: dict, t: dict):
+    """Suchzeitraum für die gezielte Suche nach neuen Leitlinien (nur Leitlinien-Themen), sonst None."""
+    if not is_guideline_topic(t):
+        return None
+    return recommend.search_window(proj.get("rules") or {}, proj.get("search_window"))
 
 
 def run_guideline_search(llm: LLM, proj: dict, log) -> None:
@@ -1326,7 +1352,8 @@ def run_guideline_search(llm: LLM, proj: dict, log) -> None:
 
     def work(t):
         raw = t.get("guidelines_raw")  # Rechercheergebnis aus dem Sammelauftrag (Sparmodus); sonst direkte Suche
-        found = G.finish_search(llm, raw) if raw else G.search_guidelines(llm, t["title"], chapter)
+        found = G.finish_search(llm, raw) if raw else G.search_guidelines(llm, t["title"], chapter,
+                                                                           _gl_window(proj, t))
         for g in found:
             text, src = G.fetch_guideline_text(g)
             g["text"], g["source"] = text, src
@@ -1334,12 +1361,35 @@ def run_guideline_search(llm: LLM, proj: dict, log) -> None:
         return found
 
     for tid, res in _parallel(todo, work, log, "Leitlinienrecherche").items():
+        t = proj["topics"][tid]
+        old = t.get("guidelines") or []
         if isinstance(res, Exception):
-            _err(proj, f"Leitlinien {proj['topics'][tid]['title']}", res)
-            proj["topics"][tid]["guidelines"] = []
+            _err(proj, f"Leitlinien {t['title']}", res)
+            t["guidelines"] = old  # eine fehlgeschlagene Nachrecherche löscht nichts
         else:
-            proj["topics"][tid]["guidelines"] = res
-        proj["topics"][tid].pop("guidelines_raw", None)
+            t["guidelines"] = merge_guidelines(res, old)
+            if is_guideline_topic(t):
+                t["gl_new"] = G.NEW_GL_VERSION
+        t.pop("guidelines_raw", None)
+
+
+def _gl_id(g: dict) -> str:
+    num = re.sub(r"[^0-9a-z]", "", (g.get("register_number") or "").lower())
+    return num.lower() or re.sub(r"[^a-z0-9äöüß]", "", (g.get("title") or "").lower())[:80]
+
+
+def merge_guidelines(new: list[dict], old: list[dict]) -> list[dict]:
+    """Neue Recherche zuerst; Leitlinien der bisherigen Recherche, die darin fehlen, bleiben erhalten (eine
+    Nachrecherche nach neuen Leitlinien soll nichts verlieren, auch keinen schon geladenen Volltext)."""
+    prev = {_gl_id(g): g for g in old}
+    out = []
+    for g in new:
+        o = prev.get(_gl_id(g))
+        if o and o.get("text") and not g.get("text"):  # schon geladener Volltext bleibt
+            g = {**g, **{k: o[k] for k in ("text", "source", "status") if k in o}}
+        out.append(g)
+    seen = {_gl_id(g) for g in new}
+    return out + [g for g in old if _gl_id(g) not in seen]
 
 
 GL_NEED_SCHEMA = obj({"requests": arr(obj({"index": {"type": "integer"}, "reason": STR}))})

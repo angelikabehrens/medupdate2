@@ -246,8 +246,9 @@ def safety_queries(frame: dict, query: str | None = None) -> list[dict]:
         return []
     qs = [{"name": "netz_evidenz", "query": f"({anchor}) AND {SAFETY_HIGH_EVIDENCE}"}]
     journals = [j.strip().replace('"', "") for j in frame.get("journals") or [] if j.strip()]
-    top = ["N Engl J Med", "Lancet", "JAMA", "BMJ"]
-    js = list(dict.fromkeys(top + journals))[:14]
+    # Angelika 2026-11-23 (Vergleich Internisten-Update Angiologie): auch führende internistische Fachjournale,
+    # z. B. Eur Heart J, JAMA Cardiol, Lancet Neurol – vorher nur die vier großen und die Journale des Fachs
+    js = list(dict.fromkeys(LEAD_JOURNALS + journals))
     qs.append({"name": "netz_journale", "query": f"({anchor}) AND (" + " OR ".join(f'"{j}"[ta]' for j in js) + ")"})
     qs.append({"name": "netz_anker", "query": anchor})
     return qs
@@ -260,6 +261,19 @@ PRECISE_HITS = 150         # ab so vielen Treffern der präzisen Suche ebenfalls
 HUGE_PRECISE_HITS = 300    # mehr Treffer der präzisen Suche: sehr großes Thema
 HUGE_CANDIDATES = 300      # sehr große Themen: so viele Kandidaten bewerten
 EVIDENCE_FIRST_MAX = 200   # davon höchstens so viele aus der vorgezogenen Suche nach hoher Evidenz
+SMALL_COMPLETE_MAX = PRECISE_HITS - 1  # bis zu so vielen Treffern der präzisen Suche: alle bewerten
+LEAD_FIRST_MAX = {HUGE_CANDIDATES: 100, BROAD_CANDIDATES: 30}  # führende Journale vorziehen: so viele höchstens
+LEAD_FIRST_VERSION = 1     # Themen ohne diesen Stand bekommen bei „Suche erweitern“ die Journal-Vorrangsuche
+# Führende allgemeine und internistische Fachjournale (PubMed-Abkürzungen); die Journale des jeweiligen Fachs
+# (search_frame["journals"]) kommen dazu. Angelika 2026-11-23 nach dem Vergleich Internisten-Update Angiologie.
+LEAD_JOURNALS = [
+    "N Engl J Med", "Lancet", "JAMA", "BMJ", "Nat Med", "Ann Intern Med", "JAMA Intern Med", "JAMA Netw Open",
+    "Eur Heart J", "Circulation", "J Am Coll Cardiol", "JAMA Cardiol", "Lancet Neurol", "JAMA Neurol", "Stroke",
+    "Blood", "Lancet Haematol", "Lancet Respir Med", "Am J Respir Crit Care Med", "J Clin Oncol", "Lancet Oncol",
+    "JAMA Oncol", "Gastroenterology", "Gut", "Lancet Gastroenterol Hepatol", "J Hepatol",
+    "Lancet Diabetes Endocrinol", "Diabetes Care", "Ann Rheum Dis", "Kidney Int", "J Am Soc Nephrol",
+    "Lancet Infect Dis", "Clin Infect Dis", "JAMA Dermatol", "Br J Dermatol", "J Am Acad Dermatol",
+]
 EVIDENCE_FIRST = ("(randomized controlled trial[pt] OR meta-analysis[pt] OR systematic[sb] OR "
                   "clinical trial, phase ii[pt] OR clinical trial, phase iii[pt] OR registry[tiab] OR "
                   "registries[tiab] OR register[tiab])")
@@ -278,7 +292,51 @@ def candidate_limit(counts: dict | None) -> int:
         return HUGE_CANDIDATES
     if (nums and max(nums) > BROAD_HITS) or (isinstance(precise, int) and precise >= PRECISE_HITS):
         return BROAD_CANDIDATES
+    if isinstance(precise, int) and MAX_CANDIDATES_PER_TOPIC < precise <= SMALL_COMPLETE_MAX:
+        # Angelika 2026-11-23 (Thrombophilie: 116 präzise Treffer, nur 60 bewertet, GTH-Positionspapier fehlte):
+        # kleine Themen vollständig – alle Treffer der präzisen Suche werden bewertet (complete_precise)
+        return precise
     return MAX_CANDIDATES_PER_TOPIC
+
+
+def small_complete(counts: dict | None) -> bool:
+    """Kleines Thema, dessen präzise Treffer alle bewertet werden (siehe candidate_limit)."""
+    counts = counts or {}
+    nums = [v for v in counts.values() if isinstance(v, int)]
+    precise = counts.get("praezise")
+    return (isinstance(precise, int) and MAX_CANDIDATES_PER_TOPIC < precise <= SMALL_COMPLETE_MAX
+            and not (nums and max(nums) > BROAD_HITS))
+
+
+def lead_topic(counts: dict | None) -> bool:
+    """Großes Thema (100 oder 300 Kandidaten): führende Journale werden vorgezogen."""
+    return candidate_limit(counts) >= BROAD_CANDIDATES and not small_complete(counts)
+
+
+def complete_precise(pmids: list[str], precise_ids: list[str]) -> list[str]:
+    """Kleine Themen: die üblichen Kandidaten (Reißverschluss, MAX_CANDIDATES_PER_TOPIC) und dazu alle übrigen
+    Treffer der präzisen Suche."""
+    base = pmids[:MAX_CANDIDATES_PER_TOPIC]
+    return list(dict.fromkeys(base + list(precise_ids)))
+
+
+def lead_first(plan: dict, pmids: list[str], von: date, bis: date, email: str, limit: int,
+               journals: list[str] | None = None) -> tuple[list[str], int | str | None]:
+    """Große Themen: Treffer der präzisen Suche aus führenden Journalen (LEAD_JOURNALS und die Journale des
+    Fachs) kommen zuerst, höchstens LEAD_FIRST_MAX. Sonst lägen etwa eine Lancet-Neurology-Metaanalyse oder
+    eine NEJM-Kohorte unter Tausenden Treffern hinter den bewerteten Plätzen (Vergleich Internisten-Update
+    Angiologie 2026-11-23). Gibt (Kandidaten, Trefferzahl) zurück; ohne präzise Suche unverändert."""
+    n = LEAD_FIRST_MAX.get(limit) or (100 if limit > BROAD_CANDIDATES else 30)  # limit: 100 oder 300
+    precise = next((q.get("query") or "" for q in plan.get("queries", []) if q.get("name") == "praezise"), "")
+    if not precise.strip():
+        return pmids[:limit], None
+    js = list(dict.fromkeys(LEAD_JOURNALS + [j.strip().replace('"', "") for j in journals or [] if j.strip()]))
+    jq = " OR ".join(f'"{j}"[ta]' for j in js)
+    try:
+        ids, count = pubmed.search(f"(({precise}) AND ({jq})){_suffix(von, bis)}", n, email)
+    except Exception as ex:  # ohne Journalsuche bleibt es bei der bisherigen Reihenfolge
+        return pmids[:limit], f"Fehler: {ex}"
+    return list(dict.fromkeys(ids[:n] + pmids))[:limit], count
 
 
 def broaden_search(llm: LLM, topic: dict, plan: dict) -> dict:
@@ -306,8 +364,9 @@ def evidence_first(plan: dict, pmids: list[str], von: date, bis: date, email: st
 
 
 def collect_candidates(plan: dict, von: date, bis: date, email: str,
-                       limit: int = MAX_CANDIDATES_PER_TOPIC) -> tuple[list[str], dict]:
-    """Führt alle Suchstrategien aus und mischt die Treffer im Reißverschlussverfahren."""
+                       limit: int = MAX_CANDIDATES_PER_TOPIC, ids_out: dict | None = None) -> tuple[list[str], dict]:
+    """Führt alle Suchstrategien aus und mischt die Treffer im Reißverschlussverfahren. ids_out: bekommt
+    die Treffer je Strategie ({Name: [PMIDs]})."""
     suffix = _suffix(von, bis)
     per_query: list[list[str]] = []
     stats = {}
@@ -322,6 +381,8 @@ def collect_candidates(plan: dict, von: date, bis: date, email: str,
             ids, count = [], f"Fehler: {ex}"
         per_query.append(ids)
         stats[q["name"]] = count
+        if ids_out is not None:
+            ids_out[q["name"]] = ids
     errors = [v for v in stats.values() if isinstance(v, str)]
     if stats and len(errors) == len(stats):
         raise RuntimeError(f"PubMed nicht erreichbar oder Suche fehlerhaft ({errors[0]})")
@@ -520,11 +581,19 @@ def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, 
         plan = plan_search(llm, topic, chapter, von, bis, frame)
     plan = with_manual(plan, topic.get("manual_query", ""))
     log(f"PubMed-Suche für „{topic['title']}“…")
-    pmids, stats = collect_candidates(plan, von, bis, email, limit=HUGE_CANDIDATES)
+    per_query: dict[str, list[str]] = {}
+    pmids, stats = collect_candidates(plan, von, bis, email, limit=HUGE_CANDIDATES, ids_out=per_query)
     limit = limit or candidate_limit(stats)  # Trefferzahlen entscheiden, ob das Thema breit ist
-    evidence_hits = None
-    if limit > BROAD_CANDIDATES:
+    evidence_hits = lead_hits = None
+    small = small_complete(stats) and limit > MAX_CANDIDATES_PER_TOPIC
+    lead = limit >= BROAD_CANDIDATES and not small
+    if limit > BROAD_CANDIDATES and not small:
         pmids, evidence_hits = evidence_first(plan, pmids, von, bis, email, limit)
+    if lead:  # große Themen: führende Journale vor allen anderen (auch vor der Evidenz)
+        pmids, lead_hits = lead_first(plan, pmids, von, bis, email, limit, (frame or {}).get("journals"))
+    if small:  # kleines Thema: alle präzisen Treffer (dazu die übrigen der ersten 60 im Reißverschluss)
+        pmids = complete_precise(pmids, per_query.get("praezise", []))
+        limit = max(limit, len(pmids))
     pmids = pmids[:limit]
     if part_queries(plan):  # zusammengesetzte Überschrift: zusätzliche Kandidaten je Teilsuche
         pmids, part_stats = part_extras(plan, pmids, von, bis, email)
@@ -557,7 +626,8 @@ def prepare_topic(llm: LLM, topic: dict, chapter: str, rules: dict, email: str, 
     new = [c for c in candidates if c["pmid"] not in known]
     if known:
         log(f"{len(candidates) - len(new)} Kandidaten für „{topic['title']}“ sind schon bewertet, {len(new)} neu.")
-    return {"limit": limit, "evidence_hits": evidence_hits, "plan": plan, "window": [von.isoformat(), bis.isoformat()], "stats": stats,
+    return {"limit": limit, "evidence_hits": evidence_hits, "lead_hits": lead_hits,
+            "lead": lead, "plan": plan, "window": [von.isoformat(), bis.isoformat()], "stats": stats,
             "attempts": attempts, "records": records, "n_candidates": len(candidates), "known": known, "new": new,
             "period": period}
 
@@ -570,7 +640,8 @@ def finish_topic(prep: dict, rated: dict[str, dict], n_max: int) -> dict:
     chosen, backup = select(ranking, n_max)
     records = prep["records"]
     return {
-        "cand_limit": prep["limit"], "evidence_hits": prep.get("evidence_hits"),
+        "cand_limit": prep["limit"], "evidence_hits": prep.get("evidence_hits"), "lead_hits": prep.get("lead_hits"),
+        "lead_first": LEAD_FIRST_VERSION if prep.get("lead") else None,
         "plan": prep["plan"], "window": prep["window"], "query_hits": prep["stats"], "attempts": prep["attempts"],
         "n_candidates": prep["n_candidates"], "ranking": ranking, "recommended": chosen, "reserve": backup,
         "records": {p: records[p] for p in set(chosen) | set(backup) | set(ranking) if p in records},

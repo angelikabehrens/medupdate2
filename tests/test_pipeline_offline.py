@@ -640,7 +640,7 @@ def test_manual_window():
     assert recommend.manual_window(None) is None
     seen = []
     orig = recommend.collect_candidates
-    recommend.collect_candidates = lambda plan, von, bis, email, limit=60: (seen.append((von, bis)) or ([], {}))
+    recommend.collect_candidates = lambda plan, von, bis, email, limit=60, **kw: (seen.append((von, bis)) or ([], {}))
     try:
         res = recommend.recommend_for_topic(FakeLLM(), {"title": "Thema Eins"}, "Gastro", {}, "x@y.z", 6,
                                             window=["2025-03-01", "2026-02-28"])
@@ -989,7 +989,8 @@ def test_chapter_selection():
     # Kandidatenzahl bei breiten Themen
     assert recommend.candidate_limit({"breit": 17959, "praezise": 400}) == recommend.HUGE_CANDIDATES
     assert recommend.candidate_limit({"breit": 17959, "praezise": 300}) == recommend.BROAD_CANDIDATES
-    assert recommend.candidate_limit({"praezise": 100, "breit": 900, "x": "Fehler"}) == 60
+    assert recommend.candidate_limit({"praezise": 100, "breit": 900, "x": "Fehler"}) == 100  # kleines Thema vollständig
+    assert recommend.candidate_limit({"praezise": 55, "breit": 900}) == 60
     assert recommend.candidate_limit({"praezise": 248, "breit": 292}) == recommend.BROAD_CANDIDATES
     # Titelabgleich nur mit Erstautor in der Nähe; Warnung beim aktuellen Jahrgang
     pr = prior.build_prior({"8 pAVK Angio Update 2026.pdf": "Samuel M, Berry C. Long-term trials of colchicine "
@@ -1012,6 +1013,8 @@ def test_huge_topics_evidence_first():
 
     def fake_search(q, retmax, email=""):
         searched.append((q, retmax))
+        if '"N Engl J Med"[ta]' in q:  # Vorrang führender Journale: hier ohne Treffer (eigener Test)
+            return [], 0
         if "registry[tiab]" in q:
             return [f"E{i}" for i in range(min(retmax, 250))], 250
         tag = "P" if q.startswith("(PRAEZ") else "B"
@@ -1049,10 +1052,124 @@ def test_huge_topics_evidence_first():
         proj["topics"] = {"T1": {"id": "T1", "title": "Sys", "recommended": [], "cand_limit": 100,
                                  "n_candidates": 97, "query_hits": {"praezise": 1237, "breit": 2138}},
                           "T2": {"id": "T2", "title": "Klein", "recommended": [], "cand_limit": 100,
-                                 "n_candidates": 95, "query_hits": {"praezise": 250, "breit": 600}}}
+                                 "n_candidates": 95, "query_hits": {"praezise": 250, "breit": 600},
+                                 "lead_first": recommend.LEAD_FIRST_VERSION}}
         assert pipeline.extension_pending(proj)["widen"] == ["T1"]
     finally:
         pubmed.search, pubmed.fetch_records = orig
+
+
+def test_lead_journals_small_topics_new_guidelines():
+    """Angelika 2026-11-23 (Vergleich Internisten-Update Angiologie): (3) kleine Themen vollständig bewerten,
+    (4) führende Journale zuerst, auch im Sicherheitsnetz, (6) Leitlinien-Themen suchen gezielt neue Leitlinien
+    im Suchzeitraum."""
+    searched = []
+
+    def fake_search(q, retmax, email=""):
+        searched.append((q, retmax))
+        if '"Eur Heart J"[ta]' in q:
+            return [f"J{i}" for i in range(min(retmax, 150))], 150
+        if "registry[tiab]" in q:
+            return [f"E{i}" for i in range(min(retmax, 250))], 250
+        if q.startswith("(PRAEZ"):
+            return [f"P{i}" for i in range(min(retmax, PN[0]))], PN[0]
+        return [f"B{i}" for i in range(min(retmax, 400))], 400
+
+    PN = [5000]
+
+    def rec(p):
+        return {"pmid": p, "title": f"T {p}", "abstract": "a" * 400, "pub_types": [], "language": "eng"}
+
+    orig = (pubmed.search, pubmed.fetch_records)
+    pubmed.search = fake_search
+    pubmed.fetch_records = lambda ids, email="": {i: rec(i) for i in ids}
+    try:
+        plan = {"pico": "p", "queries": [{"name": "praezise", "query": "PRAEZ"}, {"name": "breit", "query": "BREIT"}]}
+        win = ["2025-10-01", "2026-10-31"]
+        frame = {"journals": ["Vasa"]}
+        # (4) sehr großes Thema: bis zu 100 aus führenden Journalen vor der Evidenz-Suche
+        prep = recommend.prepare_topic(None, {"title": "Aneurysmen"}, "Angiologie", {}, "", plan=plan,
+                                       window=win, frame=frame)
+        ids = [c["pmid"] for c in prep["new"]]
+        assert prep["limit"] == 300 and prep["lead_hits"] == 150
+        assert ids[:100] == [f"J{i}" for i in range(100)] and ids[100:102] == ["E0", "E1"] and len(ids) == 300
+        lq = next(q for q, _ in searched if '"Eur Heart J"[ta]' in q)
+        assert '"Lancet Neurol"[ta]' in lq and '"Vasa"[ta]' in lq and lq.startswith("((PRAEZ")
+        res = recommend.finish_topic(prep, {}, 3)
+        assert res["lead_first"] == recommend.LEAD_FIRST_VERSION
+        # breites Thema (100 Kandidaten): höchstens 30 aus führenden Journalen zuerst
+        PN[0] = 200
+        prep = recommend.prepare_topic(None, {"title": "Mittel"}, "Angiologie", {}, "", plan=plan, window=win)
+        ids = [c["pmid"] for c in prep["new"]]
+        assert prep["limit"] == 100 and ids[:30] == [f"J{i}" for i in range(30)] and "J30" not in ids
+        # (3) kleines Thema mit 116 präzisen Treffern: alle 116 plus die übrigen Kandidaten des Reißverschlusses
+        PN[0] = 116
+        searched.clear()
+        prep = recommend.prepare_topic(None, {"title": "Thrombophilie"}, "Angiologie", {}, "", plan=plan, window=win)
+        ids = [c["pmid"] for c in prep["new"]]
+        assert prep["limit"] >= 116 and prep["lead_hits"] is None and prep["evidence_hits"] is None
+        assert {f"P{i}" for i in range(116)} <= set(ids) and len(ids) == len(set(ids))
+        assert not any('"Eur Heart J"[ta]' in q for q, _ in searched), "kein Journal-Vorrang in kleinen Themen"
+        res = recommend.finish_topic(prep, {}, 3)
+        assert not res["lead_first"]
+        # 60 präzise Treffer: unverändert 60 Kandidaten
+        PN[0] = 50
+        prep = recommend.prepare_topic(None, {"title": "Sehr klein"}, "Angiologie", {}, "", plan=plan, window=win)
+        assert prep["limit"] == 60 and len(prep["new"]) == 60
+    finally:
+        pubmed.search, pubmed.fetch_records = orig
+
+    # „Suche erweitern“: altes kleines Thema (60 von 116) und großes Thema ohne Journal-Vorrang
+    proj = pipeline.new_project()
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "Thrombophilie", "recommended": [], "cand_limit": 60, "n_candidates": 51,
+               "query_hits": {"praezise": 116, "breit": 181}},
+        "T2": {"id": "T2", "title": "Aneurysmen", "recommended": [], "cand_limit": 300, "n_candidates": 286,
+               "query_hits": {"praezise": 4634, "breit": 8292}},
+        "T3": {"id": "T3", "title": "D-Dimere", "recommended": [], "cand_limit": 100, "n_candidates": 96,
+               "query_hits": {"praezise": 155}, "lead_first": recommend.LEAD_FIRST_VERSION},
+        "T4": {"id": "T4", "title": "Klein", "recommended": [], "cand_limit": 60, "n_candidates": 40,
+               "query_hits": {"praezise": 56}}}
+    assert pipeline.extension_pending(proj)["widen"] == ["T1", "T2"]
+
+    # Sicherheitsnetz: führende internistische Journale in der Journal-Suche
+    q = recommend.safety_queries({"anchor_query": "ANKER", "journals": ["Vasa"]})[1]["query"]
+    assert all(f'"{j}"[ta]' in q for j in ("N Engl J Med", "Eur Heart J", "JAMA Cardiol", "Lancet Neurol", "Vasa"))
+    assert pipeline.SAFETY_VERSION == 3
+
+    # (6) Leitlinien-Themen: Suchzeitraum im Auftrag, mehr Websuchen; andere Themen unverändert
+    from datetime import date
+    job = guidelines.search_job("Neue AWMF-S3-Leitlinie zur Thrombose-Prophylaxe", "Angiologie", "g|T7",
+                                window=(date(2025, 10, 1), date(2026, 10, 31)))
+    assert "von 10/2025 bis 10/2026" in job.prompt and job.web_search == 12 and "höchstens 8" in job.prompt
+    plain = guidelines.search_job("Dauer der Sekundärprophylaxe", "Angiologie", "g|T8")
+    assert "NEUE Leitlinien" not in plain.prompt and plain.web_search == 8
+    proj = pipeline.new_project()
+    proj["search_window"] = ["2025-10-01", "2026-10-31"]
+    old_gl = [{"title": "S3-Leitlinie pAVK", "register_number": "065-003", "text": "x" * 4000}]
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "Neue Leitlinien mit interdisziplinärem Bezug", "guidelines": old_gl},
+        "T8": {"id": "T8", "title": "Dauer der Sekundärprophylaxe", "guidelines": []}}
+    assert [tid for tid, _ in pipeline._guideline_todo(proj)] == ["T1"]
+    assert pipeline.extension_pending(proj)["gl"] == ["T1"]
+    assert pipeline._gl_window(proj, proj["topics"]["T1"]) == (date(2025, 10, 1), date(2026, 10, 31))
+    assert pipeline._gl_window(proj, proj["topics"]["T8"]) is None
+    calls = []
+    o = (guidelines.search_guidelines, guidelines.fetch_guideline_text)
+    guidelines.search_guidelines = lambda llm, topic, chapter, window=None: (
+        calls.append(window) or [{"title": "S3-Leitlinie Rheuma kardiovaskulär", "register_number": "060-010"},
+                                 {"title": "S3 pAVK", "register_number": "065 003"}])
+    guidelines.fetch_guideline_text = lambda g: ("", "")
+    try:
+        pipeline.run_guideline_search(None, proj, lambda m: None)
+    finally:
+        guidelines.search_guidelines, guidelines.fetch_guideline_text = o
+    gl = proj["topics"]["T1"]["guidelines"]
+    assert calls == [(date(2025, 10, 1), date(2026, 10, 31))]
+    assert [g["register_number"] for g in gl] == ["060-010", "065 003"], "gleiche Registernummer nicht doppelt"
+    assert gl[1]["text"] == "x" * 4000, "schon geladener Volltext bleibt erhalten"
+    assert proj["topics"]["T1"]["gl_new"] == guidelines.NEW_GL_VERSION
+    assert pipeline._guideline_todo(proj) == [] and pipeline.extension_pending(proj)["gl"] == []
 
 
 def test_safety_net_per_section():
@@ -1570,6 +1687,7 @@ if __name__ == "__main__":
     test_chapter_selection()
     test_guideline_topic()
     test_huge_topics_evidence_first()
+    test_lead_journals_small_topics_new_guidelines()
     test_safety_net_per_section()
     test_oe_list()
     test_focus_followup_window()
