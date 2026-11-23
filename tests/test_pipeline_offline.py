@@ -478,8 +478,9 @@ def test_length_budget():
     budget = estimate_pages(tiers, 6)
     top = [{"id": f"t{i}", "length_score": 95 - i} for i in range(8)] + pubs50
     tiers2, overflow2 = plan_tiers(top, {"tier_counts": counts}, 6)
-    assert sum(1 for t in tiers2.values() if "Lang" in t) == 8, "alle Spitzenstudien lang"
-    assert estimate_pages(tiers2, 6) <= budget + 3 and len(tiers2) < 50, "dafür weniger Publikationen (Toleranz 3 Seiten)"
+    # seit 2026-11-17: Spitzenstudien lang höchstens bis zum Doppelten der geplanten Zahl (hier 6), Rest mittel
+    assert sum(1 for t in tiers2.values() if "Lang" in t) == 6, "höchstens doppelt so viele lange wie geplant"
+    assert estimate_pages(tiers2, 6) <= budget + 3 and len(tiers2) <= 50, "Gesamtzahl bleibt (Toleranz 3 Seiten)"
     tiers3, _ = plan_tiers(pubs50, {"tier_counts": counts, "max_pages": 30}, 6)
     assert estimate_pages(tiers3, 6) <= 30 and Counter(tiers3.values())["½ Seite (Mittel)"] == 8
 
@@ -1433,7 +1434,119 @@ def test_ai_notice_without_template():
         assert note.count(".") == 1
 
 
+def test_length_plan_topic_coverage():
+    """Angelika 2026-11-17 (Vergleich Onkologie unterer GI-Trakt): Viele Spitzenstudien dürfen nicht das ganze
+    Seitenbudget belegen; jedes Thema mit A- oder B-Arbeit bleibt im Plan besetzt."""
+    from collections import Counter
+    from medupdate.appraisal import plan_tiers
+    counts = {"long": 3, "mid": 8, "short": 20, "news": 19}
+    # 21 Spitzenstudien in Thema A, dazu schwächere Arbeiten in B und C
+    pubs = [{"id": f"a{i}", "length_score": 95 - i * 0.5, "topic": "A"} for i in range(21)]
+    pubs += [{"id": f"x{i}", "length_score": 70 - i * 0.3, "topic": "A"} for i in range(27)]
+    pubs += [{"id": "b1", "length_score": 55, "topic": "B"}, {"id": "c1", "length_score": 50, "topic": "C"}]
+    tiers, overflow = plan_tiers(pubs, {"tier_counts": counts, "max_pages": 28}, 6)
+    assert Counter(tiers.values())["1 Seite (Lang)"] == 6
+    assert "b1" in tiers and "c1" in tiers, "die einzige Arbeit eines Themas fällt nicht wegen der Länge heraus"
+    assert overflow and all(p.startswith(("a", "x")) for p in overflow)
+    # ohne Themenangabe wie bisher: die schwächste fällt zuerst
+    tiers2, overflow2 = plan_tiers([{k: v for k, v in p.items() if k != "topic"} for p in pubs],
+                                   {"tier_counts": counts, "max_pages": 28}, 6)
+    assert "c1" in overflow2
+    # Kapitelauswahl: Themen mit nur B-Arbeiten bekommen ihre beste Arbeit, auch wenn die Zielzahl knapp ist
+    def it(rel, ev, pi=80):
+        return {"relevance": rel, "evidence": ev, "practice_impact": pi, "novelty": 70, "risk_of_bias": "Low",
+                "question_importance": 80, "journal_impact_factor": 6, "is_primary_research": True,
+                "question_key": "", "study_design": "RCT", "rationale": "r"}
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "Onkologie"}
+    proj["manual_limits"] = {"publications": 3}
+    pipeline.apply_manual_limits(proj)
+    proj["topics"] = {
+        "T1": {"id": "T1", "title": "Erstlinie", "ranking": {f"A{i}": it(95, 95) for i in range(5)}},
+        "T2": {"id": "T2", "title": "TNT", "ranking": {"B1": it(90, 60, pi=55)}},
+    }
+    proj["records"] = {p: {"pmid": p, "title": p, "authors": ["M A"], "abstract": "x", "journal": "J",
+                           "year": "2025", "pub_types": []} for t in proj["topics"].values() for p in t["ranking"]}
+    pipeline.select_chapter(proj)
+    assert proj["topics"]["T2"]["recommended"] == ["B1"], proj["topics"]["T2"]
+    assert len(proj["topics"]["T1"]["recommended"]) == 2
+
+
+def test_heading_parts():
+    """Angelika 2026-11-17: zusammengesetzte Überschriften bekommen je Teil eine Teilsuche mit Zusatzkandidaten."""
+    hp = recommend.heading_parts
+    assert hp("Chirurgie, Strahlentherapie und neoadjuvante Chemotherapie") == [
+        "Chirurgie", "Strahlentherapie", "neoadjuvante Chemotherapie"]
+    assert hp("Oberflächenthrombose, Varikose, CVI") == ["Oberflächenthrombose", "Varikose", "CVI"]
+    assert hp("Kolorektales Karzinom: Prävention und Pathogenese") == ["Prävention", "Pathogenese"]
+    assert hp("TNT") == [] and hp("Adjuvanz bei MMRd-Tumoren") == [] and hp("Early-Onset-CRC") == []
+    assert hp("Primär- und Sekundärprävention") == []
+    assert hp("A, B, C, D, E") == [], "lange Aufzählungen: keine Teilsuchen"
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = []
+
+        def json(self, prompt, schema, **kw):
+            self.calls.append((prompt, schema))
+            data = {"pico": "p", "exclusion": "", "queries": [
+                {"name": "praezise", "query": "rectal cancer AND radiotherapy"},
+                {"name": "breit", "query": "rectal cancer"}, {"name": "hohe_evidenz", "query": "x"}]}
+            if "teilsuchen" in schema["properties"]:
+                data["teilsuchen"] = [{"teil": "Chirurgie", "query": "rectal cancer AND robotic"},
+                                      {"teil": "Strahlentherapie", "query": "rectal cancer AND radiotherapy"},
+                                      {"teil": "neoadjuvante Chemotherapie", "query": "rectal cancer AND neoadjuvant"},
+                                      {"teil": "zu viel", "query": "y"}]
+            if "queries" not in schema["properties"]:
+                data.pop("queries")
+            return data
+
+    from datetime import date
+    llm = FakeLLM()
+    topic = {"id": "T8", "title": "Chirurgie, Strahlentherapie und neoadjuvante Chemotherapie"}
+    plan = recommend.plan_search(llm, topic, "Rektumkarzinom", date(2025, 1, 1), date(2026, 1, 1))
+    names = [q["name"] for q in plan["queries"]]
+    assert names[:3] == ["praezise", "breit", "hohe_evidenz"] and len(names) == 6
+    assert names[3] == "teil: Chirurgie" and "teilsuchen" not in plan
+    assert "Teilen zusammen" in llm.calls[0][0]
+    plan2 = recommend.plan_search(llm, {"id": "T9", "title": "TNT"}, "Rektum", date(2025, 1, 1), date(2026, 1, 1))
+    assert len(plan2["queries"]) == 3 and "teilsuchen" not in llm.calls[-1][1]["properties"]
+    # Teilsuchen zählen nicht für die Kandidatengrenze
+    assert recommend.candidate_limit({"praezise": 100, "teil: Chirurgie": 5000}) == recommend.candidate_limit(
+        {"praezise": 100})
+    # Zusatzkandidaten: je Teil bis zu PART_EXTRA, hohe Evidenz zuerst, ohne Doppelte
+    old_search = pubmed.search
+    try:
+        def fake_search(q, n, email=""):
+            base = "R" if "robotic" in q else "N" if "neoadjuvant" in q else "S"
+            ids = [f"{base}{i}" for i in range(200)]
+            if "randomized controlled trial[pt]" in q:
+                ids = [f"{base}E{i}" for i in range(10)]
+            return ids[:n], len(ids)
+        pubmed.search = fake_search
+        pmids, stats = recommend.part_extras(plan, ["S0", "S1"], date(2025, 1, 1), date(2026, 1, 1), "")
+        assert pmids[:2] == ["S0", "S1"] and "RE0" in pmids and pmids.index("RE0") < pmids.index("R0")
+        assert len(pmids) == 2 + recommend.PART_EXTRA_MAX and len(set(pmids)) == len(pmids)
+        assert stats["teil: Chirurgie (hohe Evidenz)"] == 10
+    finally:
+        pubmed.search = old_search
+    # älteres Projekt: Teilsuchen nachträglich, dann nur neue Kandidaten bewerten
+    t = {"id": "T8", "title": topic["title"], "plan": {"queries": [{"name": "praezise", "query": "q"}]},
+         "recommended": [], "ranking": {}}
+    assert pipeline.parts_pending(t)
+    proj = pipeline.new_project()
+    proj["toc"] = {"chapter_title": "Rektum"}
+    proj["topics"] = {"T8": t, "T9": {"id": "T9", "title": "TNT", "plan": {"queries": [{"name": "praezise",
+                                                                                          "query": "q"}]}}}
+    assert pipeline.extension_pending(proj)["parts"] == ["T8"]
+    assert pipeline.add_parts(llm, proj, lambda m: None) == ["T8"]
+    assert t["parts_new"] and t["parts_done"] and len(recommend.part_queries(t["plan"])) == 3
+    assert not pipeline.parts_pending(t) and pipeline.extension_pending(proj)["parts"] == []
+
+
 if __name__ == "__main__":
+    test_length_plan_topic_coverage()
+    test_heading_parts()
     test_fazit_and_headings()
     test_final_toc_rules()
     test_direct_upload()

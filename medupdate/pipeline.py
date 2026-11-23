@@ -230,7 +230,40 @@ def run_search_plan(llm: LLM, proj: dict, log, force: bool = False) -> None:
         t = proj["topics"][tid]
         t["plan"] = res
         t["plan_rev"] = t.get("plan_rev", 0) + 1
+        if recommend.heading_parts(t.get("title", "")):
+            t["parts_done"] = True  # Teilsuchen gehören jetzt zum Suchplan
     recount_plan(proj, log)
+
+
+def parts_pending(t: dict) -> bool:
+    """Zusammengesetzte Überschrift, deren (älterer) Suchplan noch keine Teilsuchen hat (seit 2026-11-17)."""
+    return (t.get("searchable") is not False and bool((t.get("plan") or {}).get("queries"))
+            and not t.get("parts_done") and not recommend.part_queries(t.get("plan"))
+            and bool(recommend.heading_parts(t.get("title", ""))))
+
+
+def add_parts(llm: LLM, proj: dict, log) -> list[str]:
+    """Ergänzt bei zusammengesetzten Überschriften die Teilsuchen im vorhandenen Suchplan (ein kurzer Aufruf je
+    Thema). Bereits bewertete Themen bewerten danach nur die neuen Kandidaten (parts_new)."""
+    todo = [(tid, t) for tid, t in _search_topics(proj) if parts_pending(t)]
+    if not todo:
+        return []
+    chapter = (proj["toc"] or {}).get("chapter_title", "")
+    frame = proj.get("search_frame")
+    done = []
+    for tid, res in _parallel(todo, lambda t: recommend.plan_parts(llm, t, chapter, frame), log, "Teilsuchen").items():
+        t = proj["topics"][tid]
+        if isinstance(res, Exception):
+            _err(proj, f"Teilsuchen {t['title']}", res)
+            continue
+        t["parts_done"] = True
+        if res:
+            t["plan"]["queries"] = list(t["plan"].get("queries", [])) + res
+            t["parts_new"] = True
+            done.append(tid)
+    if done:
+        log(f"Teilsuchen für {len(done)} zusammengesetzte Überschrift(en) ergänzt.")
+    return done
 
 
 def recount_plan(proj: dict, log=lambda m: None) -> None:
@@ -273,7 +306,16 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
         return ("recommended" not in t or t.get("n_candidates") == 0 or (window and t.get("window") != window)
                 or t.get("plan_rev", 0) != t.get("ranked_rev", 0) or rank_failed(t))
 
+    try:
+        add_parts(llm, proj, log)
+    except AccountError:
+        raise
+    except Exception as ex:
+        _err(proj, "Teilsuchen", ex)
+
     def widen(t):  # Thema mit bisher weniger Kandidaten als heute vorgesehen: nur die zusätzlichen bewerten
+        if t.get("parts_new"):  # neue Teilsuchen (zusammengesetzte Überschrift)
+            return True
         return (t.get("cand_limit", MAX_CANDIDATES_PER_TOPIC) < recommend.candidate_limit(t.get("query_hits"))
                 and t.get("n_candidates", 0) >= MAX_CANDIDATES_PER_TOPIC - 15)
 
@@ -298,6 +340,7 @@ def run_recommendations(llm: LLM, proj: dict, log, batch: bool = False) -> None:
             return
         t = proj["topics"][tid]
         t.pop("rec_error", None)
+        t.pop("parts_new", None)
         t.pop("selected", None)  # alte Auswahl passt nicht zur neuen Trefferliste
         proj["records"].update(res.pop("records"))
         manual = t.get("manual_query", "")
@@ -701,6 +744,7 @@ def run_safety_net(llm: LLM, proj: dict, log, batch: bool = False) -> None:
 # ----------------------------------------------------------------------
 
 CHAPTER_MIN_SCORE = 45   # relative Empfehlung: darunter wird auch bei freier Zielzahl nichts empfohlen
+COVERAGE_MIN_SCORE = 60  # Themenabdeckung: beste Arbeit eines Themas ab Priorität B (Score ab 60) zuerst
 SHEET_MIN_ITEMS = 8      # Auswahlliste: so viele Arbeiten je Thema mindestens zeigen (Empfehlung + Reserve)
 SHEET_MIN_RELEVANCE = 40  # Auffüllen der Liste nur mit Arbeiten, die zum Thema passen
 BACKGROUND_MAX = 5       # Hintergrundliteratur je Thema
@@ -945,7 +989,22 @@ def select_chapter(proj: dict, log=lambda m: None) -> None:
                                  primary[p][1].get("length_score", 0)), reverse=True)
     rec: dict[str, list[str]] = {tid: [] for tid, _ in topics}
     per_key: dict[tuple, int] = {}
+    # Themenabdeckung zuerst (Angelika 2026-11-17, Vergleich Onkologie unterer GI-Trakt): Jedes Thema mit einer
+    # A- oder B-Arbeit, die am besten dorthin passt, bekommt seine beste Arbeit, bevor die übrigen Plätze
+    # kapitelweit nach Priorität und Score vergeben werden.
     for p in eligible:
+        tid, it = primary[p]
+        if rec[tid] or not (it.get("priority") == "A" or it.get("score", 0) >= COVERAGE_MIN_SCORE):
+            continue
+        if sum(len(v) for v in rec.values()) >= target:
+            break
+        rec[tid].append(p)
+        key = (tid, (it.get("question_key") or p).strip().lower())
+        per_key[key] = per_key.get(key, 0) + 1
+    first = {p for v in rec.values() for p in v}
+    for p in eligible:
+        if p in first:
+            continue
         if sum(len(v) for v in rec.values()) >= target:
             break
         tid, it = primary[p]
@@ -1151,7 +1210,8 @@ def extension_pending(proj: dict) -> dict:
     net = 0
     if ranked and proj.get("search_frame") and (proj.get("safety_net") or {}).get("version") != SAFETY_VERSION:
         net = len(safety_sections(proj)) or 1  # Suche je Hauptüberschrift (2026-11-15) noch nicht gelaufen
-    return {"widen": widen, "followup": followup_pending(proj) if ranked else 0, "net": net}
+    parts = [tid for tid, t in _search_topics(proj) if "recommended" in t and parts_pending(t)]
+    return {"widen": widen, "followup": followup_pending(proj) if ranked else 0, "net": net, "parts": parts}
 
 
 def run_reroute(llm: LLM, proj: dict, log) -> None:
@@ -1227,7 +1287,7 @@ def _rank_item(proj: dict, p: str, t: str) -> dict:
 
 
 def _length_info(proj: dict, pairs: list[tuple[str, str]]) -> list[dict]:
-    return [{"id": p, "length_score": _rank_item(proj, p, t).get("length_score", 50)} for p, t in pairs]
+    return [{"id": p, "length_score": _rank_item(proj, p, t).get("length_score", 50), "topic": t} for p, t in pairs]
 
 
 def _n_sections(proj: dict, topic_ids) -> int:
@@ -2164,7 +2224,7 @@ def _preview_tiers(llm: LLM, proj: dict, pairs: list[tuple[str, str]], log, join
         rk = proj["topics"][t].get("ranking", {})
         members = [m for m, g in member_of.items() if g == u] if u != p else [p]
         best = max((rk.get(m, {}) for m in members), key=lambda it: it.get("length_score", 0), default={})
-        units.append(({"id": u, "length_score": best.get("length_score", 50)}, t))
+        units.append(({"id": u, "length_score": best.get("length_score", 50), "topic": t}, t))
     apply_manual_limits(proj)
     rules = proj.get("rules") or {}
     limit_key = [rules.get("max_pages"), rules.get("max_references"), rules.get("tier_counts")]

@@ -476,7 +476,7 @@ if proj.get("toc"):
                     pipeline.fit_to_length(proj, log)
                 run_with_status("Auswahl wird angepasst", _refocus, _flm)
         _ext = pipeline.extension_pending(proj)
-        if _ext["widen"] or _ext["followup"] or _ext.get("net"):
+        if _ext["widen"] or _ext["followup"] or _ext.get("net") or _ext.get("parts"):
             _parts = []
             _extra = 0
             if _ext["widen"]:
@@ -485,6 +485,13 @@ if proj.get("toc"):
                              for t in _wt)
                 _parts.append(f"{len(_wt)} Themen mit vielen Treffern: bis zu {_extra} zusätzliche Kandidaten, "
                               "hohe Evidenz zuerst")
+            if _ext.get("parts"):
+                _pt = [proj["topics"][tid] for tid in _ext["parts"]]
+                _pn = sum(min(len(recommend.heading_parts(t["title"])) * recommend.PART_EXTRA,
+                              recommend.PART_EXTRA_MAX) for t in _pt)
+                _parts.append(f"Teilsuchen für {len(_pt)} zusammengesetzte Überschrift(en) "
+                              f"({', '.join(t.get('number') or t['title'] for t in _pt)}): bis zu {_pn} zusätzliche Kandidaten")
+                _extra += _pn
             if _ext["followup"]:
                 _parts.append(f"Nachsuche nach Folgepublikationen zu {_ext['followup']} guten Studien")
             if _ext.get("net"):
